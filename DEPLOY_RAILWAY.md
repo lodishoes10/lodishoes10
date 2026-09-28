@@ -10,19 +10,21 @@ Yang Anda butuhkan: akun GitHub (kode sudah di sana), akun MongoDB Atlas (gratis
 
 ## LANGKAH 1 — Simpan kode terbaru ke GitHub
 
-1. Di kolom chat Emergent, klik **"Save to Github"** (folder/kolom input chat) agar file
-   terbaru ikut ter-push: `Dockerfile`, `railway.toml`, `.dockerignore`, `DEPLOY_RAILWAY.md`,
-   dan semua revisi batch 6.
-2. Pastikan branch `main` di repo `lodianto502-bit/lodishoes10` berisi file `Dockerfile`
-   di root. (Cek di GitHub.)
+1. Kode terbaru (versi final Jun 2026) SUDAH ter-push ke `https://github.com/lodishoes10/lodishoes10`
+   branch `main`, termasuk `Dockerfile`, `railway.toml`, `.dockerignore`, `DEPLOY_RAILWAY.md`.
+2. Cek di GitHub: file `Dockerfile` ada di root repo.
 
-> Cadangan offline (jika GitHub bermasalah): unduh zip
-> `https://shoe-pos-setup.preview.emergentagent.com/lodishoes-pos-REVISI-batch6.zip`,
-> ekstrak, lalu push manual ke repo.
+> Cadangan offline: unduh zip `lodishoes-pos-FINAL-jun2026.zip` dari preview Emergent
+> (`/lodishoes-pos-FINAL-jun2026.zip`), ekstrak, lalu push manual ke repo.
 
 ---
 
 ## LANGKAH 2 — Siapkan MongoDB Atlas (database online, gratis)
+
+> **Sudah ada:** cluster `lodishoes.7dj73tb.mongodb.net`, user `lodianto502_db_user`, DB `lodishoes`,
+> Network Access `0.0.0.0/0`. Pakai `MONGO_URL` yang sama dengan di workspace Emergent → data yang
+> sudah diinput di preview langsung terbawa ke Railway (tidak dobel, tidak perlu migrasi).
+> Langkah di bawah hanya jika ingin cluster baru.
 
 1. Buka https://cloud.mongodb.com → **Sign up / Login**.
 2. **Create Project** → nama bebas (mis. `lodishoes`) → **Create Cluster** → pilih
