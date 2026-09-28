@@ -1,0 +1,39 @@
+{
+  "summary": "Full regression QA of LodiShoes POS after batch6 restore. Backend: 30/31 pytest tests pass (serial). Frontend: all 13 admin pages + all kasir pages load without runtime/console errors for admin, kasirbalaraja, and kasirciledug. Role-based access enforced correctly. Bug fix VERIFIED: Dashboard 'Omzet Hari Ini' sub-label now reads 'Penjualan + selisih tukar hari ini' (Dashboard.tsx:118) and backend reports.py:112 adds diff_rev to revenue so omzet increases by tukar price difference on the exchange day (confirmed by passing test_exchange_option1_sale_unchanged_diff_in_today_revenue and test_exchange_option1_cheaper_target_reduces_revenue).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_smoke_lodishoes.py",
+    "/app/backend/tests/test_iteration2_full.py",
+    "/app/backend/tests/test_iteration3_new.py",
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/test_exchange_multi.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "STALE TEST (not a product bug) - /app/backend/tests/test_iteration2_full.py::test_exchange_single_source_qty2_multi_target still asserts old 'Opsi-2' behavior (src_item.qty==0 after exchange). Current spec is 'Opsi-1' (SALE unchanged) per user requirements. Update the test's assertion to: assert src_item['qty']==2 and src_item['exchanged_qty']==2 (or delete the assertion). Product behavior is correct; test needs updating.",
+    "NOTE (not a bug) - When running full pytest with default -n 2 xdist workers, test_backend_api.py TestAuth/TestBarcode/TestSales fail with 401 because parallel workers share the same session fixtures in an unsafe way. Running serially (-n 0) resolves all these. Consider adding proper session isolation or class-level fixtures to that legacy test file. This is a test-infra issue, not an app bug."
+  ],
+  "critical_code_review_comments": [
+    "backend/routers/reports.py correctly folds TUKAR revenue (diff_rev) and cost_diff into today revenue AND gross-profit endpoint - implementation matches Opsi-1 spec.",
+    "Dashboard.tsx sub-label copy matches spec exactly: 'Penjualan + selisih tukar hari ini'.",
+    "Auth cookie is Secure+HttpOnly (verified by test_cookie_session_is_secure).",
+    "WhatsApp/Twilio 503 behavior is intentional and env is set to empty strings - expected per user spec.",
+    "Kasir role-based access properly hides admin-only sidebar items (Master Produk, Laba Kotor & Bersih, Pengguna, Pengaturan) and admin routes redirect to home when accessed directly by kasir."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "97% (30/31 serial; 1 stale-test failure)", "frontend": "100%"},
+  "test_credentials": "admin/1234, kasirbalaraja/1111, kasirciledug/2222 - all verified working. Admin PIN was NOT changed during tests.",
+  "seed_data_creation": "None. Only ephemeral SALE + TUKAR + TRANSFER records created via smoke/regression tests (transfers were rejected during teardown). No seed data modified.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend runs via supervisor at 8001. Full pytest MUST be run with -n 0 (serial) because test_backend_api.py has session-fixture races under xdist. Bug-fix verification target: reports.py revenue=SALE.total + TUKAR.total; Dashboard sub-label 'Penjualan + selisih tukar hari ini'. All routes tested: /, /transaksi, /riwayat, /riwayat-tukar, /stok, /transfer, /label, /opname, /kas, /produk, /laporan, /pengguna, /pengaturan. Kasir routes exclude last 4. Kasir sees Pasang Terjual card instead of Laba Kotor.",
+  "rca of the issue": "N/A - user's bug fix (omzet include exchange diff + updated sub-label copy) is confirmed working end-to-end via both backend aggregation tests and UI inspection."
+}

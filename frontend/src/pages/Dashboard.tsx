@@ -115,7 +115,7 @@ export default function Dashboard() {
         <MetricCard
           label="Omzet Hari Ini"
           value={rupiah(d?.today.revenue ?? 0)}
-          sub="Penjualan saja (tukar tidak dihitung)"
+          sub="Penjualan + selisih tukar hari ini"
           icon={Banknote}
           accent="bg-teal-500"
           testId="metric-revenue"

@@ -79,3 +79,12 @@ via cron (03:00 WIB).
 ## Next Tasks
 - Minta user verifikasi data/flow sesuai kebutuhan toko.
 - Isi kredensial Twilio bila struk WA diperlukan.
+
+
+## Restore ke workspace baru (Jun 2026)
+- Kode dari ZIP batch6 (GitHub `main` sebelumnya masih batch3) → dipasang ke /app, lalu di-push ke `lodishoes10/lodishoes10` main (commit a1c2eed).
+- Backend → MongoDB Atlas `lodishoes.7dj73tb` DB `lodishoes` (IP 0.0.0.0/0 diizinkan). Cluster kosong sebelumnya (hanya sample_mflix) → auto-seed jalan (admin/1234, kasirbalaraja/1111, kasirciledug/2222). Data transaksi lama TIDAK ada di Atlas.
+- Env: COOKIE_SECURE=true, CORS_ORIGINS=*, Twilio kosong (WA 503 normal). Node 20 → `yarn install --ignore-engines` (zxing minta Node 24).
+- Verifikasi: login, /transaksi, /produk (tombol Impor CSV), cookie Secure, login_attempts, omzet tukar Opsi 1 — semua ada.
+
+- Jun 2026 (final QA): label omzet Dashboard/Laporan disesuaikan Opsi 1; QA penuh 3 role lolos (iteration_2); test stale diperbarui. Rangkuman: memory/RANGKUMAN_RESTORE_JUN2026.md. ZIP: frontend/public/lodishoes-pos-FINAL-jun2026.zip

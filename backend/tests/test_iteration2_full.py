@@ -108,9 +108,8 @@ def test_exchange_single_source_qty2_multi_target(kasir_blr):
     r = s.get(f"{API}/transactions/{tx['id']}", timeout=15)
     mutated = r.json()
     src_item = next(i for i in mutated["items"] if i["id"] == item_id)
-    assert src_item["qty"] == 0 and src_item["exchanged_qty"] == 2
-    fx = [i for i in mutated["items"] if i.get("from_exchange")]
-    assert len(fx) >= 2
+    assert src_item["qty"] == 2 and src_item["exchanged_qty"] == 2
+    assert not any(i.get("from_exchange") for i in mutated["items"])  # Opsi 1: SALE asli tidak ditambah baris
 
     # verify stock decrement on both new targets
     mat2 = _matrix(s, branch_id)

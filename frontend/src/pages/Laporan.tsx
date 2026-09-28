@@ -56,7 +56,7 @@ export default function Laporan() {
     <div>
       <PageHeader
         title="Laporan Laba Kotor"
-        description="Omzet − diskon − harga modal. Transaksi TUKAR tidak dihitung sebagai penjualan, jadi laporan tidak dobel."
+        description="Omzet − diskon − harga modal. Selisih harga tukar dicatat di hari tukar (transaksi asli tidak berubah), jadi laporan tidak dobel."
         testId="laporan-header"
       >
         <Badge variant="secondary" data-testid="laporan-admin-badge">
