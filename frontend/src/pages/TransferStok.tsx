@@ -61,7 +61,7 @@ export default function TransferStok() {
   });
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["transfers", branchId] });
+    qc.invalidateQueries({ queryKey: ["transfers"] });
     qc.invalidateQueries({ queryKey: ["stock-matrix", branchId] });
     qc.invalidateQueries({ queryKey: ["dashboard", branchId] });
   };

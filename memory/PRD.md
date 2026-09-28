@@ -30,10 +30,16 @@ Revisi batch 3: scan barcode kamera, barcode gambar + label cetak, tukar artikel
 - [x] Barcode PNG + auto-assign nomor 899xxxxxxxxxx.
 - [x] Seed idempoten (transaksi contoh upsert by receipt_no).
 
+## Implemented (2026-09-28, batch 4)
+- [x] Unduh PDF halaman label (print-to-PDF jendela bersih, `label-pdf-button`).
+- [x] Filter rentang tanggal Riwayat (`riwayat-date-from/to/clear`, memakai `from`/`to` API).
+- [x] Lencana jumlah transfer menunggu di menu admin (`GET /api/transfers/pending-count`, `nav-transfer-pending-badge`).
+- Verifikasi: tsc + oxlint 0 error, curl endpoint pending-count & filter tanggal OK. UI belum dites di browser (kredit user terbatas).
+
 ## Backlog (P1/P2)
 - P1: WhatsApp Twilio (endpoint+UI siap, 503 sampai TWILIO_* diisi).
-- P2: Ekspor label sebagai PDF; filter riwayat per tanggal di UI; role-approval berjenjang.
+- P2: role-approval berjenjang; uji kamera scanner di HP nyata.
 
 ## Next Tasks
 - (opsional) Isi kredensial Twilio untuk aktifkan struk WhatsApp.
-- (opsional) Tambah PDF export halaman label.
+- Cek UI batch 4 di browser (badge, filter tanggal, tombol Unduh PDF).

@@ -57,6 +57,8 @@ export default function Riwayat() {
   const qc = useQueryClient();
   const [term, setTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(1);
   const [receipt, setReceipt] = useState<Transaction | null>(null);
 
@@ -70,12 +72,14 @@ export default function Riwayat() {
   const keyRef = useRef(1);
 
   const listQuery = useQuery({
-    queryKey: ["transactions", branchId, typeFilter, term, page],
+    queryKey: ["transactions", branchId, typeFilter, term, fromDate, toDate, page],
     queryFn: () =>
       apiGet<Paged<Transaction>>(
         `/transactions${branchQuery(branchId)}${branchId ? "&" : "?"}page=${page}&page_size=20${
           typeFilter ? `&type=${typeFilter}` : ""
-        }${term.trim() ? `&q=${encodeURIComponent(term.trim())}` : ""}`,
+        }${term.trim() ? `&q=${encodeURIComponent(term.trim())}` : ""}${
+          fromDate || toDate ? `&from=${fromDate || toDate}&to=${toDate || fromDate}` : ""
+        }`,
       ),
     enabled: !!branchId,
   });
@@ -203,6 +207,47 @@ export default function Riwayat() {
             <SelectItem value="TUKAR" data-testid="riwayat-type-tukar">Tukar</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-1.5" data-testid="riwayat-date-range">
+          <Input
+            type="date"
+            value={fromDate}
+            max={toDate || undefined}
+            onChange={(e) => {
+              setFromDate(e.target.value);
+              setPage(1);
+            }}
+            className="tabular w-[150px]"
+            title="Dari tanggal"
+            data-testid="riwayat-date-from"
+          />
+          <span className="text-xs text-muted-foreground">s/d</span>
+          <Input
+            type="date"
+            value={toDate}
+            min={fromDate || undefined}
+            onChange={(e) => {
+              setToDate(e.target.value);
+              setPage(1);
+            }}
+            className="tabular w-[150px]"
+            title="Sampai tanggal"
+            data-testid="riwayat-date-to"
+          />
+          {(fromDate || toDate) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setFromDate("");
+                setToDate("");
+                setPage(1);
+              }}
+              data-testid="riwayat-date-clear"
+            >
+              Reset
+            </Button>
+          )}
+        </div>
       </div>
 
       {listQuery.isError && (

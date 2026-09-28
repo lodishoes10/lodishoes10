@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Barcode, Printer } from "lucide-react";
+import { Barcode, FileDown, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -54,6 +54,29 @@ export default function Label() {
     setSelected((prev) => (prev[id] ? { ...prev, [id]: n } : prev));
   };
 
+  // Unduh PDF: buka jendela bersih berisi label saja lalu panggil dialog cetak → pilih "Simpan sebagai PDF".
+  const downloadPdf = () => {
+    const area = document.getElementById("label-print");
+    if (!area) return;
+    const win = window.open("", "_blank", "width=900,height=1200");
+    if (!win) {
+      toast.error("Pop-up diblokir. Izinkan pop-up untuk mengunduh PDF.");
+      return;
+    }
+    const html = area.outerHTML.replace(/src="\/api\//g, `src="${window.location.origin}/api/`);
+    win.document.write(`<!doctype html><html><head><title>Label Barcode Lodi Shoes</title>
+<style>@page{size:A4;margin:8mm}body{margin:0;font-family:Arial,sans-serif}img{display:block}p{margin:0}</style>
+</head><body>${html}</body></html>`);
+    win.document.close();
+    const imgs = Array.from(win.document.images);
+    Promise.all(
+      imgs.map((img) => (img.complete ? Promise.resolve() : new Promise<void>((r) => { img.onload = () => r(); img.onerror = () => r(); }))),
+    ).then(() => {
+      win.focus();
+      win.print();
+    });
+  };
+
   return (
     <div>
       <PageHeader
@@ -75,6 +98,15 @@ export default function Label() {
             </Button>
           ))}
         </div>
+        <Button
+          variant="outline"
+          className="gap-2"
+          disabled={labels.length === 0}
+          onClick={downloadPdf}
+          data-testid="label-pdf-button"
+        >
+          <FileDown className="size-4" /> Unduh PDF
+        </Button>
         <Button
           className="gap-2"
           disabled={labels.length === 0}

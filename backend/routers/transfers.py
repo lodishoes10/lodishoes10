@@ -113,6 +113,12 @@ async def list_transfers(branch_id: str = "", limit: int = Query(30, le=100), us
     return [transfer_out(d) for d in docs]
 
 
+@router.get("/transfers/pending-count")
+async def pending_count(user: dict = Depends(require_admin)):
+    """Jumlah transfer MENUNGGU — untuk lencana notifikasi di menu admin."""
+    return {"count": await db.transfers.count_documents({"status": "MENUNGGU"})}
+
+
 @router.post("/transfers", response_model=TransferOut, status_code=201)
 async def create_transfer(input: TransferIn, user: dict = Depends(get_current_user)):
     """Pengajuan transfer oleh kasir/admin. Stok BELUM bergerak sampai admin menyetujui."""

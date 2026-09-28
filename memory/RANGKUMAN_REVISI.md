@@ -62,6 +62,11 @@ bila kredit habis dan pindah ke workspace baru, tidak perlu mengulang dari awal.
 ### f. Metode pembayaran
 - TUNAI, QRIS, TRANSFER, **DEBIT** — berlaku di transaksi biasa & pelunasan selisih tukar.
 
+### g. Tambahan revisi ke-2 (2026-09-28)
+- **Unduh PDF label** (`pages/Label.tsx`, tombol `label-pdf-button`): membuka jendela bersih berisi label saja lalu dialog cetak → pilih "Simpan sebagai PDF". Tanpa library tambahan.
+- **Filter rentang tanggal Riwayat** (`pages/Riwayat.tsx`, `riwayat-date-from/to/clear`): memakai query `from`/`to` yang sudah ada di `GET /api/transactions`.
+- **Lencana transfer menunggu** di menu admin (`components/AppShell.tsx`, `nav-transfer-pending-badge`): endpoint baru `GET /api/transfers/pending-count` (admin only), refresh tiap 30 detik & setelah setujui/tolak.
+
 ## 4. File penting yang diubah/ditambah
 Backend:
 - `routers/transactions.py` — sale + exchange berbasis qty (mutasi omset).

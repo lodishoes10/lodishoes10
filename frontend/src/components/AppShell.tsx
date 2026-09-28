@@ -59,6 +59,13 @@ const BRANCH_KEY = "lodishoes.branch";
 
 function NavLinks({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () => void }) {
   const { pathname } = useLocation();
+  const pending = useQuery({
+    queryKey: ["transfers", "pending-count"],
+    queryFn: () => apiGet<{ count: number }>("/transfers/pending-count"),
+    enabled: isAdmin,
+    refetchInterval: 30_000,
+  });
+  const pendingCount = pending.data?.count ?? 0;
   return (
     <nav className="flex flex-col gap-1" data-testid="sidebar-nav">
       {NAV.filter((n) => !n.adminOnly || isAdmin).map((item) => {
@@ -85,6 +92,15 @@ function NavLinks({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () =
             />
             <Icon className={cn("size-[18px] shrink-0 transition-transform duration-150", !active && "group-hover:translate-x-0.5")} />
             <span className="truncate">{item.label}</span>
+            {item.to === "/transfer" && isAdmin && pendingCount > 0 && (
+              <span
+                className="tabular ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-slate-900"
+                title={`${pendingCount} transfer menunggu persetujuan`}
+                data-testid="nav-transfer-pending-badge"
+              >
+                {pendingCount}
+              </span>
+            )}
           </Link>
         );
       })}
