@@ -2,22 +2,28 @@ import path from "node:path";
 import { defineConfig, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { visualEdits } from "@emergentbase/visual-edits/vite";
+
+// Build polos (Railway/Docker di luar Emergent): paket internal @emergentbase dilepas.
+const plainBuild = process.env.PLAIN_BUILD === "true";
 
 // Supervisor exports DISABLE_HOT_RELOAD=true when the platform sets ENABLE_RELOAD=false.
 const hotReloadDisabled = process.env.DISABLE_HOT_RELOAD === "true";
 
-// Visual Edits (x-* JSX tagging, overlay, /edit-file endpoint) is dev-server-only by
-// default (apply: serve); escape hatch mirrors DISABLE_HOT_RELOAD.
-const visualEditsDisabled = process.env.DISABLE_VISUAL_EDITS === "true";
-
-// Branded error overlay (build + runtime errors); escape hatch mirrors the two above.
-const emergentOverlayDisabled = process.env.DISABLE_EMERGENT_OVERLAY === "true";
+// Fails open: paket internal Emergent mungkin tidak terpasang (build Docker/Railway).
+async function loadVisualEdits() {
+  if (plainBuild || process.env.DISABLE_VISUAL_EDITS === "true") return null;
+  try {
+    const mod = await import("@emergentbase/visual-edits/vite");
+    return mod.visualEdits();
+  } catch {
+    return null;
+  }
+}
 
 // Fails open: a broken overlay package must degrade to "no overlay" (Vite's own overlay
 // takes over), never to "no dev server". Never let a preview aid take the app down.
 async function loadEmergentOverlay() {
-  if (emergentOverlayDisabled) return null;
+  if (plainBuild || process.env.DISABLE_EMERGENT_OVERLAY === "true") return null;
   try {
     const mod = await import("@emergentbase/overlay/vite");
     return mod.emergentOverlay();
@@ -36,13 +42,13 @@ if (!hotReloadDisabled) {
 // https://vite.dev/config/
 export default defineConfig(async () => {
   const emergentOverlay = await loadEmergentOverlay();
+  const visualEditsPlugin = await loadVisualEdits();
   return {
     plugins: [
       react(),
       tailwindcss(),
-      ...(visualEditsDisabled ? [] : [visualEdits()]),
-      // No isServe guard: this factory takes no ConfigEnv arg, so build purity here rests
-      // on the package's own `apply: "serve"`.
+      // Visual Edits (x-* JSX tagging, overlay, /edit-file) hanya untuk dev server Emergent.
+      ...(visualEditsPlugin ? [visualEditsPlugin] : []),
       ...(emergentOverlay ? [emergentOverlay] : []),
     ],
     resolve: {

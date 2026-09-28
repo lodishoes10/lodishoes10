@@ -22,7 +22,6 @@ import { EmptyState, ErrorNote, SkeletonRows } from "@/components/Chrome";
 import BarcodeScanner from "@/components/BarcodeScanner";
 import ReceiptDialog from "@/components/ReceiptDialog";
 import { branchQuery, useScope } from "@/hooks/useScope";
-import { useBranches } from "@/hooks/useAuth";
 import { angka, onlyDigits, parseUang, pesanError, rupiah } from "@/lib/format";
 import type { Article, PaymentMethod, StockRow, Transaction } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -55,13 +54,11 @@ export default function POS() {
   const [barcode, setBarcode] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
 
-  const { data: branches } = useBranches();
-  const branch = branches?.find((b) => b.id === branchId);
-
   const stockQuery = useQuery({
     queryKey: ["stock-matrix", branchId],
     queryFn: () => apiGet<StockRow[]>(`/stock/matrix${branchQuery(branchId)}`),
     enabled: !!branchId,
+    refetchInterval: 10_000,
   });
 
   /**

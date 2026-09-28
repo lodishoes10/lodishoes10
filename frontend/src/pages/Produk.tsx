@@ -25,8 +25,15 @@ import {
 } from "@/components/ui/table";
 import { EmptyState, ErrorNote, PageHeader, SkeletonRows } from "@/components/Chrome";
 import { PromptDialog, usePromptDialog } from "@/components/PromptDialog";
+import CsvImportDialog from "@/components/CsvImportDialog";
 import { onlyDigits, parseUang, pesanError, rupiah } from "@/lib/format";
 import type { Article, Paged } from "@/lib/types";
+
+const PRODUK_TEMPLATE = `kode,nama,brand,kategori,barcode,modal
+LS-100,Lodi Runner Merah,Lodi,Sneakers,8990001000011,185000
+LS-101,Lodi Court Hitam,Lodi,Sneakers,8990001000028,175000
+,Sandal Lodi Jepit Hitam,Lodi,Sandal,,45000
+`;
 
 export default function Produk() {
   const qc = useQueryClient();
@@ -82,6 +89,16 @@ export default function Produk() {
         description="Kelola artikel dan harga modal (harga pokok). Hanya admin yang bisa melihat & mengisi modal."
         testId="produk-header"
       >
+        <CsvImportDialog
+          endpoint="/articles/import"
+          title="Impor Master Produk"
+          description="Unggah CSV untuk menambah/memperbarui banyak artikel sekaligus. Artikel dicocokkan berdasarkan kode; kode kosong akan dibuatkan otomatis."
+          columnsHint="kode, nama, brand, kategori, barcode, modal"
+          templateName="template-produk-lodishoes.csv"
+          templateContent={PRODUK_TEMPLATE}
+          triggerTestId="produk-import"
+          onDone={() => qc.invalidateQueries({ queryKey: ["articles"] })}
+        />
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger
             render={

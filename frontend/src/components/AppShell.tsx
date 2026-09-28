@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   ArrowLeftRight,
   Barcode,
@@ -10,6 +11,7 @@ import {
   Menu as MenuIcon,
   Package,
   Receipt,
+  Repeat,
   ScrollText,
   Settings,
   Store,
@@ -31,7 +33,51 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useBranches, useMe } from "@/hooks/useAuth";
 import { BranchScopeContext } from "@/hooks/useScope";
 import { endSession } from "@/lib/session";
+import { rupiah } from "@/lib/format";
+import type { Paged, Transaction } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/**
+ * Pemantau orderan real-time. Setiap 10 detik memeriksa penjualan terbaru di cabang aktif.
+ * Bila ada struk SALE baru dari kasir LAIN, tampilkan notifikasi dan segarkan dashboard,
+ * stok, serta riwayat — sehingga admin tahu ada orderan masuk & stok berkurang tanpa refresh.
+ */
+function useOrderNotifier(branchId: string, userId: string) {
+  const qc = useQueryClient();
+  const baseline = useRef<{ branch: string; receipt: string | null }>({ branch: "", receipt: null });
+  useQuery({
+    queryKey: ["order-watch", branchId],
+    queryFn: async () => {
+      const res = await apiGet<Paged<Transaction>>(
+        `/transactions?branch_id=${encodeURIComponent(branchId)}&type=SALE&page_size=1`,
+      );
+      const latest = res.items[0] ?? null;
+      const b = baseline.current;
+      if (b.branch !== branchId) {
+        // Ganti cabang → set patokan tanpa notifikasi (hindari alarm palsu).
+        baseline.current = { branch: branchId, receipt: latest?.receipt_no ?? null };
+        return res;
+      }
+      if (latest && latest.receipt_no !== b.receipt) {
+        if (b.receipt !== null && latest.cashier_id !== userId) {
+          toast.success(`Orderan baru • ${latest.receipt_no}`, {
+            description: `${latest.branch_name} · ${latest.cashier_name} · ${rupiah(latest.total)}`,
+          });
+        }
+        baseline.current = { branch: branchId, receipt: latest.receipt_no };
+        qc.invalidateQueries({ queryKey: ["dashboard", branchId] });
+        qc.invalidateQueries({ queryKey: ["stock-matrix", branchId] });
+        qc.invalidateQueries({ queryKey: ["transactions"] });
+      }
+      return res;
+    },
+    enabled: !!branchId,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+    retry: false,
+  });
+}
 
 interface NavItem {
   to: string;
@@ -44,6 +90,7 @@ const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/transaksi", label: "Transaksi", icon: Receipt },
   { to: "/riwayat", label: "Riwayat & Tukar", icon: ScrollText },
+  { to: "/riwayat-tukar", label: "Riwayat Tukar", icon: Repeat },
   { to: "/stok", label: "Stok", icon: Package },
   { to: "/transfer", label: "Transfer Stok", icon: ArrowLeftRight },
   { to: "/label", label: "Label Barcode", icon: Barcode },
@@ -63,7 +110,8 @@ function NavLinks({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () =
     queryKey: ["transfers", "pending-count"],
     queryFn: () => apiGet<{ count: number }>("/transfers/pending-count"),
     enabled: isAdmin,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
   });
   const pendingCount = pending.data?.count ?? 0;
   return (
@@ -153,6 +201,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       setBranchId: (id: string) => setAdminBranch(id),
     };
   }, [user, isAdmin, adminBranch, branches]);
+
+  useOrderNotifier(scope?.branchId ?? "", user?.id ?? "");
 
   if (isLoading) {
     return (

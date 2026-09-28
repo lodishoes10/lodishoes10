@@ -52,12 +52,14 @@ export default function TransferStok() {
     queryKey: ["stock-matrix", branchId],
     queryFn: () => apiGet<StockRow[]>(`/stock/matrix${branchQuery(branchId)}`),
     enabled: !!branchId,
+    refetchInterval: 10_000,
   });
 
   const listQuery = useQuery({
     queryKey: ["transfers", branchId],
     queryFn: () => apiGet<Transfer[]>(`/transfers${branchQuery(branchId)}`),
     enabled: !!branchId,
+    refetchInterval: 10_000,
   });
 
   const invalidate = () => {

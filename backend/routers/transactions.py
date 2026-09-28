@@ -118,8 +118,14 @@ class WAIn(BaseModel):
     phone: str = Field(min_length=8, max_length=24)
 
 
-def tx_out(doc: dict) -> TxOut:
-    return TxOut(**clean_doc(doc))
+def tx_out(doc: dict, user: dict | None = None) -> TxOut:
+    data = clean_doc(doc)
+    # Modal (cost) bersifat rahasia — hanya admin. Kasir tidak boleh melihat cost/line_cost.
+    if user is not None and user.get("role") != "admin":
+        for it in data.get("items", []):
+            it["cost"] = 0
+            it["line_cost"] = 0
+    return TxOut(**data)
 
 
 def alloc_discount(lines: list[dict], discount: int) -> None:
@@ -247,7 +253,7 @@ async def create_sale(input: SaleIn, user: dict = Depends(get_current_user)):
         "created_at": now_utc(),
     }
     await db.transactions.insert_one(dict(tx))
-    return tx_out(tx)
+    return tx_out(tx, user)
 
 
 @router.get("/transactions", response_model=Page[TxOut])
@@ -280,7 +286,7 @@ async def list_transactions(
         .limit(page_size)
         .to_list(page_size)
     )
-    return Page(items=[tx_out(d) for d in docs], total=total, page=page, page_size=page_size)
+    return Page(items=[tx_out(d, user) for d in docs], total=total, page=page, page_size=page_size)
 
 
 @router.get("/transactions/{tx_id}", response_model=TxOut)
@@ -289,18 +295,19 @@ async def get_transaction(tx_id: str, user: dict = Depends(get_current_user)):
     if not tx:
         raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
     read_branch(user, tx["branch_id"])  # kasir can only open own-branch transactions
-    return tx_out(tx)
+    return tx_out(tx, user)
 
 
 @router.post("/transactions/{tx_id}/exchange", response_model=TxOut, status_code=201)
 async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get_current_user)):
     """Tukar artikel/ukuran berbasis qty. Target boleh campur; selisih ditotal jadi satu.
 
-    Efek:
+    Efek (kebijakan: omzet harian = uang laci harian):
     - Stok artikel/ukuran lama dikembalikan (+), target dikurangi (−) — atomik berkompensasi.
-    - Transaksi SALE asal dimutasi: qty baris lama berkurang, baris baru (target) ditambah,
-      subtotal/total dihitung ulang → omset total & per artikel menyesuaikan otomatis.
-    - Tercatat juga sebagai transaksi TUKAR (selisih uang) yang TIDAK masuk omzet/laba.
+    - Transaksi SALE asal TIDAK diubah nilainya (omzet penjualan tetap di tanggal beli asli);
+      hanya exchanged_qty per baris dinaikkan agar sisa tukar terkontrol.
+    - Selisih harga jual (total_diff) & selisih modal (cost_diff) dicatat sebagai transaksi TUKAR
+      di HARI INI, dan laporan/omzet menghitung TUKAR juga → selisih uang muncul di hari tukar.
     """
     tx = await db.transactions.find_one({"id": tx_id})
     if not tx:
@@ -320,13 +327,14 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
         raise HTTPException(status_code=404, detail="Cabang tidak ditemukan")
 
     # ---- Validasi & resolusi semua baris/target (harga & modal di-snapshot server) ----
+    # Baris asal = sisa yang belum ditukar (qty - exchanged_qty). Transaksi asal TIDAK diubah.
     resolved: list[dict] = []  # per baris sumber
     for line in input.lines:
         item = next((i for i in tx["items"] if i["id"] == line.item_id), None)
         if not item:
             raise HTTPException(status_code=404, detail="Item tidak ditemukan di transaksi ini")
         qty_line = sum(t.qty for t in line.targets)
-        remaining = int(item["qty"])  # qty baris = sisa yang belum ditukar
+        remaining = int(item["qty"]) - int(item.get("exchanged_qty", 0))  # sisa yang masih bisa ditukar
         if qty_line < 1 or qty_line > remaining:
             raise HTTPException(
                 status_code=422,
@@ -385,11 +393,15 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
             )
 
     # Selisih per pasang → ditotal. Positif = pelanggan menambah; negatif = kasir mengembalikan.
+    # cost_diff = selisih modal (HPP) karena barang yang dijual berganti → dipakai laporan laba.
     total_diff = 0
+    cost_diff = 0
     for r in resolved:
         old_price = int(r["item"]["price"])
+        old_cost = int(r["item"].get("cost", 0) or 0)
         for t in r["targets"]:
             total_diff += t["qty"] * (t["price"] - old_price)
+            cost_diff += t["qty"] * (int(t["cost"]) - old_cost)
 
     if total_diff > 0:
         if input.payment_method == "TUNAI":
@@ -450,18 +462,21 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
                 {"$inc": {"qty": r["qty"]}, "$set": {"updated_at": now_utc()}},
             )
 
-    # ---- Mutasi transaksi SALE asal: omset per artikel ikut pindah ----
-    items = [dict(i) for i in tx["items"]]
-    tukar_items: list[dict] = []
+    # ---- Transaksi SALE asal TIDAK diubah nilainya: omzet penjualan tetap di tanggal beli asli.
+    # Kita hanya menaikkan exchanged_qty per baris agar sisa tukar terkontrol (tidak dobel tukar).
+    # Selisih uang dicatat sebagai transaksi TUKAR di HARI INI → omzet harian cocok dengan kas.
     exchange_lines: list[dict] = []
+    tukar_items: list[dict] = []
     for r in resolved:
         item = r["item"]
-        src = next(i for i in items if i["id"] == item["id"])
         n = r["qty"]
-        src["qty"] = int(src["qty"]) - n
-        src["exchanged_qty"] = int(src.get("exchanged_qty", 0)) + n
-        src["line_revenue"] = int(src["price"]) * src["qty"]
-        src["line_cost"] = int(src["cost"]) * src["qty"]
+        await db.transactions.update_one(
+            {"id": tx_id},
+            {"$inc": {"items.$[e].exchanged_qty": n}},
+            array_filters=[{"e.id": item["id"]}],
+        )
+        old_price = int(item["price"])
+        old_cost = int(item.get("cost", 0) or 0)
         exchange_lines.append(
             {
                 "item_id": item["id"],
@@ -469,7 +484,7 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
                 "article_code": item["article_code"],
                 "article_name": item["article_name"],
                 "size": item["size"],
-                "price": int(item["price"]),
+                "price": old_price,
                 "qty": n,
                 "targets": [
                     {k: t[k] for k in ("article_id", "article_code", "article_name", "size", "qty", "price")}
@@ -478,24 +493,9 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
             }
         )
         for t in r["targets"]:
-            items.append(
-                {
-                    "id": str(uuid.uuid4()),
-                    "article_id": t["article_id"],
-                    "article_code": t["article_code"],
-                    "article_name": t["article_name"],
-                    "size": t["size"],
-                    "qty": t["qty"],
-                    "price": t["price"],
-                    "cost": t["cost"],
-                    "line_revenue": t["price"] * t["qty"],
-                    "discount_alloc": 0,
-                    "line_cost": t["cost"] * t["qty"],
-                    "exchanged_qty": 0,
-                    "from_exchange": True,
-                }
-            )
-            # Satu baris TUKAR per target: artikel LAMA di field utama, target di new_*.
+            # Baris TUKAR (satu per target): artikel LAMA di field utama, target di new_*.
+            # line_revenue/line_cost = nilai lama (untuk tampilan struk). rev_delta/cost_delta =
+            # selisih harga jual & modal (dipakai laporan agar laba per artikel akurat).
             tukar_items.append(
                 {
                     "id": str(uuid.uuid4()),
@@ -504,11 +504,11 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
                     "article_name": item["article_name"],
                     "size": item["size"],
                     "qty": t["qty"],
-                    "price": int(item["price"]),
-                    "cost": int(item.get("cost", 0)),
-                    "line_revenue": int(item["price"]) * t["qty"],
+                    "price": old_price,
+                    "cost": old_cost,
+                    "line_revenue": old_price * t["qty"],
                     "discount_alloc": 0,
-                    "line_cost": int(item.get("cost", 0)) * t["qty"],
+                    "line_cost": old_cost * t["qty"],
                     "exchanged_qty": 0,
                     "from_exchange": False,
                     "new_article_id": t["article_id"],
@@ -516,15 +516,10 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
                     "new_article_name": t["article_name"],
                     "new_size": t["size"],
                     "new_price": t["price"],
+                    "rev_delta": t["qty"] * (t["price"] - old_price),
+                    "cost_delta": t["qty"] * (int(t["cost"]) - old_cost),
                 }
             )
-
-    new_subtotal = sum(int(i["line_revenue"]) for i in items)
-    new_total = new_subtotal - int(tx.get("discount", 0))
-    await db.transactions.update_one(
-        {"id": tx_id},
-        {"$set": {"items": items, "subtotal": new_subtotal, "total": new_total}},
-    )
 
     await db.exchanges.insert_one(
         {
@@ -555,6 +550,7 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
         "subtotal": total_diff,
         "discount": 0,
         "total": total_diff,
+        "cost_diff": cost_diff,
         "payment_method": input.payment_method,
         "paid": paid,
         "change": change,
@@ -565,7 +561,76 @@ async def exchange_items(tx_id: str, input: ExchangeIn, user: dict = Depends(get
         "created_at": now_utc(),
     }
     await db.transactions.insert_one(dict(tukar_tx))
-    return tx_out(tukar_tx)
+    return tx_out(tukar_tx, user)
+
+
+class ExchangeTargetOut(BaseModel):
+    article_id: str
+    article_code: str
+    article_name: str
+    size: str
+    qty: int
+    price: int
+
+
+class ExchangeLineOut(BaseModel):
+    item_id: str
+    article_id: str
+    article_code: str
+    article_name: str
+    size: str
+    price: int
+    qty: int
+    targets: list[ExchangeTargetOut]
+
+
+class ExchangeOut(BaseModel):
+    id: str
+    tx_id: str
+    receipt_no: str
+    lines: list[ExchangeLineOut]
+    total_diff: int
+    payment_method: str
+    branch_id: str
+    branch_name: str
+    by_name: str
+    created_at: datetime
+
+
+@router.get("/exchanges", response_model=Page[ExchangeOut])
+async def list_exchanges(
+    branch_id: str = "",
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    """Riwayat penukaran rapi: satu dokumen per proses tukar (dari apa → ke apa + selisih).
+
+    Kasir hanya melihat cabangnya; admin bisa semua/pilih cabang.
+    """
+    match: dict = {}
+    b = read_branch(user, branch_id)
+    if b:
+        match["branch_id"] = b
+    if from_date or to_date:
+        start, end = range_bounds_utc(from_date, to_date, default_days=30)
+        match["created_at"] = {"$gte": start, "$lt": end}
+    total = await db.exchanges.count_documents(match)
+    docs = (
+        await db.exchanges.find(match)
+        .sort("created_at", -1)
+        .skip((page - 1) * page_size)
+        .limit(page_size)
+        .to_list(page_size)
+    )
+    return Page(
+        items=[ExchangeOut(**clean_doc(d)) for d in docs],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 def normalize_wa(phone: str) -> str:

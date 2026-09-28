@@ -4,6 +4,15 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
+
+
+def _parse_iso(s: str) -> date:
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Format tanggal harus YYYY-MM-DD")
+
 
 def app_zone() -> ZoneInfo:
     """Business timezone (toko beroperasi di WIB)."""
@@ -24,8 +33,8 @@ def range_bounds_utc(from_s: str | None, to_s: str | None, default_days: int = 3
     """Inclusive app-tz date range (YYYY-MM-DD) → aware-UTC [start, end) window for Mongo queries."""
     zone = app_zone()
     today = datetime.now(zone).date()
-    d_from = date.fromisoformat(from_s) if from_s else today - timedelta(days=default_days - 1)
-    d_to = date.fromisoformat(to_s) if to_s else today
+    d_from = _parse_iso(from_s) if from_s else today - timedelta(days=default_days - 1)
+    d_to = _parse_iso(to_s) if to_s else today
     start = datetime(d_from.year, d_from.month, d_from.day, tzinfo=zone).astimezone(timezone.utc)
     end_day = d_to + timedelta(days=1)
     end = datetime(end_day.year, end_day.month, end_day.day, tzinfo=zone).astimezone(timezone.utc)

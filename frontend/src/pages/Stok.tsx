@@ -26,10 +26,19 @@ import {
 import { EmptyState, ErrorNote, PageHeader, SkeletonRows } from "@/components/Chrome";
 import BarcodeScanner from "@/components/BarcodeScanner";
 import { PromptDialog, usePromptDialog } from "@/components/PromptDialog";
+import CsvImportDialog from "@/components/CsvImportDialog";
 import { branchQuery, useScope } from "@/hooks/useScope";
 import { angka, onlyDigits, parseUang, pesanError, rupiah } from "@/lib/format";
 import type { Article, Paged, StockAddResult, StockRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const STOK_TEMPLATE = `kode,ukuran,jumlah,harga_jual
+LS-001,39,8,299000
+LS-001,40,10,299000
+LS-001,41,6,299000
+LS-002,39,5,259000
+LS-002,40,7,259000
+`;
 
 export default function Stok() {
   const { branchId, branchName, isAdmin } = useScope();
@@ -54,6 +63,7 @@ export default function Stok() {
     queryKey: ["stock-matrix", branchId],
     queryFn: () => apiGet<StockRow[]>(`/stock/matrix${branchQuery(branchId)}`),
     enabled: !!branchId,
+    refetchInterval: 10_000,
   });
 
   const articlesQuery = useQuery({
@@ -181,6 +191,20 @@ export default function Stok() {
         description={`Stok per ukuran di ${branchName}. Scan barcode untuk mengisi artikel otomatis; ukuran boleh ditulis bebas (39, 40.5, XL).`}
         testId="stok-header"
       >
+        <CsvImportDialog
+          endpoint="/stock/import"
+          title={`Impor Stok — ${branchName}`}
+          description="Unggah CSV untuk mengisi stok per ukuran di cabang aktif. Jumlah & harga akan MENIMPA nilai lama untuk ukuran yang sama (cocok untuk isi awal/koreksi). Artikel dicocokkan dari kode/barcode — pastikan produknya sudah ada."
+          columnsHint="kode (atau barcode), ukuran, jumlah, harga_jual"
+          templateName="template-stok-lodishoes.csv"
+          templateContent={STOK_TEMPLATE}
+          triggerTestId="stok-import"
+          extraBody={{ branch_id: branchId }}
+          onDone={() => {
+            qc.invalidateQueries({ queryKey: ["stock-matrix", branchId] });
+            qc.invalidateQueries({ queryKey: ["dashboard", branchId] });
+          }}
+        />
         <Button
           variant="outline"
           className="gap-2"

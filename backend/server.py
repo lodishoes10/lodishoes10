@@ -31,7 +31,19 @@ from routers import (  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.index_task = asyncio.create_task(ensure_indexes())  # background: a big index build must not block boot
+    async def boot():
+        await ensure_indexes()
+        # Deploy pertama kali (mis. Railway + Atlas baru): database kosong → isi data awal
+        # (cabang, akun admin/kasir, artikel contoh). Idempoten, hanya jalan bila users kosong.
+        if await db.users.count_documents({}) == 0:
+            try:
+                from seed import main as seed_main
+                await seed_main()
+                logger.info("Database kosong — seed awal dijalankan otomatis (admin/1234)")
+            except Exception as exc:
+                logger.error("Auto-seed gagal: %s", exc)
+
+    app.state.index_task = asyncio.create_task(boot())  # background: a big index build must not block boot
     yield
     client.close()
 
@@ -83,3 +95,24 @@ logger = logging.getLogger(__name__)
 
 # Include the router in the main app — must stay the LAST statement.
 app.include_router(api_router)
+
+# --- Produksi satu-service (Railway/Render): sajikan build frontend (Vite dist) ---
+# Semua path non-/api mengembalikan index.html (SPA client-side routing). Di preview
+# Emergent folder dist tidak ada, jadi blok ini tidak aktif dan Vite dev server tetap jalan.
+FRONTEND_DIST = ROOT_DIR.parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    from starlette.exceptions import HTTPException as _StarletteHTTPException
+    from starlette.responses import FileResponse
+    from starlette.staticfiles import StaticFiles
+
+    class SPAStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope):  # fallback ke index.html utk rute SPA
+            try:
+                return await super().get_response(path, scope)
+            except _StarletteHTTPException as exc:
+                if exc.status_code == 404:
+                    return FileResponse(FRONTEND_DIST / "index.html")
+                raise
+
+    app.mount("/", SPAStaticFiles(directory=str(FRONTEND_DIST), html=True), name="spa")
+    logger.info("Menyajikan frontend build dari %s", FRONTEND_DIST)

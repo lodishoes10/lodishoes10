@@ -1,45 +1,81 @@
-# LodiShoes POS — PRD (Living Document)
+# LodiShoes POS — PRD
 
-## Problem Statement
-POS sepatu multi-cabang (React+TS, FastAPI, MongoDB), melanjutkan source existing "Lodi's Project".
-Revisi batch 3: scan barcode kamera, barcode gambar + label cetak, tukar artikel berbasis qty
-(target campur, penyesuaian omset), transfer stok berpersetujuan admin.
+## Problem Statement (asli)
+Kasir toko sepatu multi-cabang (Balaraja & Ciledug): POS, stok per ukuran, barcode
+(generate PNG + scan kamera HP), cetak label A4, tukar artikel/ukuran berbasis qty
+(maks 7 hari, cabang asal), penyesuaian omset otomatis ikut tukar, transfer stok
+antar cabang dengan persetujuan admin, kas harian, laporan, backup MongoDB harian
+via cron (03:00 WIB).
 
-## Architecture
-- Frontend: Vite + React 19 + TS strict, TanStack Query, shadcn/base-ui, Tailwind v4, @zxing/browser.
-- Backend: FastAPI (routes prefix /api, docs off), motor/MongoDB. Uang = integer Rupiah.
-- Barcode: python-barcode + Pillow (PNG Code128 server-side).
+## Arsitektur
+- Frontend: Vite + React 19 + TypeScript, TanStack Query, base-ui/shadcn, Tailwind v4. Proxy /api → localhost:8001 (vite.config.ts). Port 3000.
+- Backend: FastAPI, motor (MongoDB async), semua route prefix /api, docs dimatikan. Port 8001.
+- Uang integer Rupiah. Auth PIN (scrypt) + cookie SESSION httpOnly.
+- Cron: .emergent/crons.yml → POST /api/cron/backup-mongo (Bearer WEBHOOK_CRON_SECRET), arsip 7 hari di BACKUP_DIR.
+- Env backend: MONGO_URL, DB_NAME, CORS_ORIGINS, APP_TZ=Asia/Jakarta, WEBHOOK_CRON_SECRET, BACKUP_DIR=/app/backups.
 
-## User Personas
-- Kasir cabang: transaksi, tukar barang, ajukan transfer. Terkunci 1 cabang, modal disembunyikan.
-- Admin: semua cabang, approve/tolak transfer, kelola artikel/label, lihat modal & laporan laba.
-
-## Core Requirements (static)
-1. Transaksi POS multi-metode (TUNAI/QRIS/TRANSFER/DEBIT), stok atomik, struk thermal 80mm.
-2. Scan barcode: hardware scanner (Enter), kamera live, unggah foto.
-3. Barcode gambar per artikel + halaman label cetak 1/2/3 kolom (A4).
-4. Tukar artikel/ukuran berbasis qty: sebagian pasang, target campur, selisih ditotal, stok +/- ,
-   tukar bertahap <=7 hari & cabang sendiri, kasir boleh tanpa approval.
-5. Penyesuaian omset/laporan otomatis saat tukar (omset per artikel pindah, total menyesuaikan).
-6. Transfer stok antar cabang: pengajuan -> MENUNGGU -> admin approve/tolak; stok pindah saat approve.
-7. Konkurensi aman multi-cabang: nomor struk unik (counter atomik), stok tak minus, anti artikel dobel.
-
-## Implemented (2026-09-28)
-- [x] Semua fitur revisi batch 3 (poin 1-7) — diverifikasi testing agent: backend 16/16, frontend smoke 100%.
-- [x] Konkurensi: 4 sale paralel BLR+CLD (struk unik), 5 sale paralel stok=1 (1x 201, sisa 409, tak minus).
-- [x] Barcode PNG + auto-assign nomor 899xxxxxxxxxx.
-- [x] Seed idempoten (transaksi contoh upsert by receipt_no).
-
-## Implemented (2026-09-28, batch 4)
-- [x] Unduh PDF halaman label (print-to-PDF jendela bersih, `label-pdf-button`).
-- [x] Filter rentang tanggal Riwayat (`riwayat-date-from/to/clear`, memakai `from`/`to` API).
-- [x] Lencana jumlah transfer menunggu di menu admin (`GET /api/transfers/pending-count`, `nav-transfer-pending-badge`).
-- Verifikasi: tsc + oxlint 0 error, curl endpoint pending-count & filter tanggal OK. UI belum dites di browser (kredit user terbatas).
-
-## Backlog (P1/P2)
-- P1: WhatsApp Twilio (endpoint+UI siap, 503 sampai TWILIO_* diisi).
-- P2: role-approval berjenjang; uji kamera scanner di HP nyata.
+## Persona
+- Admin/pemilik: semua cabang, modal + laba kotor, approve transfer, reset demo, backup.
+- Kasir: POS cabang sendiri, tukar ≤7 hari, ajukan transfer (tidak bisa approve).
 
 ## Next Tasks
-- (opsional) Isi kredensial Twilio untuk aktifkan struk WhatsApp.
-- Cek UI batch 4 di browser (badge, filter tanggal, tombol Unduh PDF).
+- Push ke GitHub bila user kirim token WRITE.
+- (Opsional produksi) batasi CORS_ORIGINS ke domain toko saat go-live.
+- Isi kredensial Twilio bila struk WA diperlukan.
+
+## Riwayat Implementasi- Sep 2026 (workspace lama): seluruh fitur di atas selesai (lihat RANGKUMAN_REVISI.md & SPEC.md).
+- 28 Sep 2026 (workspace ini): RESTORE dari GitHub lodianto502-bit/lodishoes10.
+  - Clone via PAT, salin ke /app, hapus sisa template CRA (App.js, index.js, ui/*.jsx radix, craco/postcss/tailwind config lama).
+  - requirements.txt: buang emergentintegrations + litellm (konflik hash, tidak dipakai kode).
+  - yarn install --ignore-engines (@zxing/library minta node>=24, pod node 20 — aman).
+  - backend/.env dibuat ulang (tidak ikut repo). Seed dijalankan.
+  - Smoke test PASS: backend 9/9 pytest, frontend login admin+kasir, /label, barcode PNG, sale TUNAI, transfer approval.
+- 28 Sep 2026 (batch 4):
+  - Tukar MULTI-ARTIKEL sekaligus di UI (Riwayat.tsx): checkbox per barang + tombol "Tukar Beberapa";
+    diuji Runner uk39/40/41 → Court40+Formal39+Sport41 dalam satu proses (backend lines[]).
+  - Real-time near-live: refetchInterval 10s pada Dashboard/Stok/POS/Riwayat/Transfer; useOrderNotifier
+    di AppShell (toast "Orderan baru" + auto-invalidate dashboard/stok/riwayat); badge transfer 15s.
+  - Zip lengkap: /app/frontend/public/lodishoes-pos-REVISI-batch4.zip (juga di /app/).
+  - Push GitHub GAGAL: PAT read-only (butuh token write access).
+
+- 28 Sep 2026 (workspace BARU, restore ke-2): restore dari zip lodishoes-pos-REVISI.zip (184 KB, workspace lama) karena repo GitHub private.
+  - Hapus template CRA lama (src App.js/index.js, craco/jsconfig/postcss/tailwind config, plugins/, yarn.lock lama) → rsync isi zip ke /app.
+  - pip install requirements OK; yarn install --ignore-engines (@zxing/library minta node>=24, pod node 20 — aman).
+  - backend/.env dari zip sudah cocok (localhost mongo, DB_NAME=test_database). Seed dijalankan ulang (idempoten).
+  - Verifikasi testing agent PASS: backend smoke 13/13, login admin+2 kasir (API+UI), POS sale TUNAI sukses (TRX-20260928-BLR-007), semua halaman admin render, logout OK.
+  - Catatan: legacy test_backend_api.py kena rate-limit login (5/15mnt per ip:username) bila full suite dijalankan — jalankan `mongosh test_database --eval 'db.login_attempts.deleteMany({})'` dulu. Route transfer adalah /transfer (bukan /transfer-stok).
+  - KEAMANAN: user membagikan PAT GitHub read-only di chat — WAJIB revoke di GitHub Settings > Developer settings.
+- 28 Sep 2026 (verifikasi pra-deploy MENYELURUH): testing agent iteration_2 PASS 100% —
+  backend 25/25 pytest (auth admin+2 kasir, wrong-PIN 401, POS sale+diskon+QRIS, barcode lookup,
+  transfer request+approve guard, TUKAR multi-line 2 item→2 artikel beda, TUKAR multi-target 1 sumber
+  qty2→2 artikel/ukuran beda, guard qty-mismatch 422 & cross-branch 403, exchanges list, dashboard,
+  laba kotor admin-only, kas, opname, pengguna, logout). Frontend semua halaman render tanpa error JS,
+  dialog Tukar (tombol "Pengganti" & "Tukar Beberapa") terkonfirmasi. Fitur tukar multi-artikel/
+  multi-ukuran/multi-pasang FULLY VERIFIED. Aplikasi DEPLOY-READY.
+- 28 Sep 2026 (BATCH 6 — pra-deploy, user deploy manual hari ini):
+  - OMZET TUKAR → Opsi 1 (keputusan pemilik): transaksi SALE asal TIDAK diubah nilainya; hanya
+    exchanged_qty naik. Selisih harga jual dicatat sebagai TUKAR di HARI TUKAR dan ikut omzet hari itu
+    (target lebih murah → selisih negatif). Omzet harian kini cocok dengan uang laci. Laba Kotor ikut
+    akurat via cost_diff. reports.py: dashboard today & trend + gross-profit kini menghitung TUKAR.
+  - IMPORT CSV massal (terpisah): Master Produk `/api/articles/import` (admin) kolom
+    kode,nama,brand,kategori,barcode,modal; Stok `/api/stock/import` (require_branch) kolom
+    kode/barcode,ukuran,jumlah,harga_jual (qty & harga MENIMPA — isi awal/koreksi). Frontend: komponen
+    baru CsvImportDialog + tombol "Impor CSV" di Produk.tsx & Stok.tsx + template contoh unduh.
+  - COOKIE SECURE env-driven: cookie_secure() (env COOKIE_SECURE, default true) → cookie pos_session
+    Secure=true. .env: COOKIE_SECURE="true".
+  - Testing agent iteration_3 PASS 100%: backend 23/23 pytest, UI /produk & /stok dialog Impor CSV +
+    template terkonfirmasi, semua nav render. Verifikasi omzet Opsi-1 (SALE tetap, diff di hari tukar,
+    dashboard naik sebesar diff) OK.
+  - Zip backup baru: /app/frontend/public/lodishoes-pos-REVISI-batch6.zip (111 file). Rangkuman:
+    memory/RANGKUMAN_REVISI_BATCH6.md.
+  - DEPLOY: user mau manual hari ini. Cookie butuh frontend+backend satu origin → rekomendasi
+    Emergent Publish ATAU Railway/Render (backend menyajikan build frontend). Vercel+Railway lintas
+    domain = cookie tidak terkirim (butuh SameSite=None + CORS credentials). Menunggu pilihan user.
+## Backlog
+- P0: Keputusan jalur deploy (satu origin) + eksekusi config sesuai pilihan.
+- P1: WhatsApp struk via Twilio (butuh TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM di backend/.env — belum diset, fitur WA akan error 503 sampai diisi).
+- P2: CORS_ORIGINS dibatasi ke origin eksplisit saat go-live (saat ini * atas permintaan user); refactor endpoint exchange.
+
+## Next Tasks
+- Minta user verifikasi data/flow sesuai kebutuhan toko.
+- Isi kredensial Twilio bila struk WA diperlukan.

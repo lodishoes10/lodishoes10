@@ -1,6 +1,9 @@
 """Stok per cabang. Anti-dobel dijamin index unik (branch_id, article_id, size):
 menambah ukuran 39 ke artikel yang sama HANYA menaikkan qty, tidak pernah duplikat."""
 
+import csv
+import io
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -121,6 +124,88 @@ async def add_stock(input: StockAddIn, user: dict = Depends(get_current_user)):
         "qty": int(doc["qty"]),
         "merged": existing is not None,  # True = ukuran sudah ada → qty digabung (anti-dobel bekerja)
     }
+
+
+class StockImportIn(BaseModel):
+    branch_id: str = ""
+    csv: str = Field(min_length=1, max_length=2_000_000)
+
+
+def _norm(name: str) -> str:
+    return (name or "").strip().lower().replace(" ", "_")
+
+
+_STOCK_ALIASES = {
+    "kode": "code", "code": "code", "sku": "code",
+    "barcode": "barcode",
+    "ukuran": "size", "size": "size",
+    "jumlah": "qty", "qty": "qty", "stok": "qty", "stock": "qty",
+    "harga_jual": "price", "harga": "price", "price": "price", "selling_price": "price",
+}
+
+
+@router.post("/stock/import")
+async def import_stock(input: StockImportIn, user: dict = Depends(get_current_user)):
+    """Impor massal stok per ukuran dari CSV untuk cabang aktif.
+
+    Header didukung: kode (atau barcode), ukuran, jumlah, harga_jual.
+    Jumlah & harga di-SET (menimpa nilai lama untuk ukuran itu) — cocok untuk isi awal/koreksi.
+    """
+    b = require_branch(user, input.branch_id)
+    reader = csv.DictReader(io.StringIO(input.csv))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=422, detail="CSV kosong atau tanpa header")
+    field_map = {fn: _STOCK_ALIASES.get(_norm(fn)) for fn in reader.fieldnames}
+    vals = set(field_map.values())
+    if "size" not in vals or "price" not in vals or ("code" not in vals and "barcode" not in vals):
+        raise HTTPException(status_code=422, detail="CSV wajib punya kolom: kode (atau barcode), ukuran, harga_jual")
+
+    applied = 0
+    errors: list[str] = []
+    now = now_utc()
+    for i, raw in enumerate(reader, start=2):
+        row: dict = {}
+        for fn, val in raw.items():
+            key = field_map.get(fn)
+            if key:
+                row[key] = (val or "").strip()
+        size = (row.get("size") or "").strip()[:8]
+        if not size:
+            continue
+        code = (row.get("code") or "").strip().upper()
+        barcode = (row.get("barcode") or "").strip()
+        art = None
+        if code:
+            art = await db.articles.find_one({"code": code})
+        if not art and barcode:
+            art = await db.articles.find_one({"barcode": barcode})
+        if not art:
+            errors.append(f"Baris {i}: artikel '{code or barcode}' tidak ditemukan")
+            continue
+        try:
+            qty = int(re.sub(r"\D", "", row.get("qty", "")) or 0)
+            price = int(re.sub(r"\D", "", row.get("price", "")) or 0)
+        except ValueError:
+            errors.append(f"Baris {i}: jumlah/harga tidak valid")
+            continue
+        if price <= 0:
+            errors.append(f"Baris {i} ({art['name']} {size}): harga jual harus > 0")
+            continue
+        await db.stock_items.update_one(
+            {"branch_id": b, "article_id": art["id"], "size": size},
+            {
+                "$set": {"qty": qty, "selling_price": price, "updated_at": now},
+                "$setOnInsert": {
+                    "id": str(uuid.uuid4()),
+                    "created_at": now,
+                    "article_code": art["code"],
+                    "article_name": art["name"],
+                },
+            },
+            upsert=True,
+        )
+        applied += 1
+    return {"ok": True, "applied": applied, "errors": errors[:50]}
 
 
 @router.patch("/stock/{stock_id}")

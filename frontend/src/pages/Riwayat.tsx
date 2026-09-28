@@ -6,6 +6,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +53,20 @@ interface TargetRow {
   qty: number;
 }
 
+// Satu baris sumber (item transaksi) yang bisa ditukar; boleh dinyalakan/matikan
+// dan boleh punya banyak target berbeda-beda artikel/ukuran.
+interface LineState {
+  key: number;
+  item: TxItem;
+  enabled: boolean;
+  qty: number;
+  max: number; // sisa pasang yang masih bisa ditukar (qty asli − sudah ditukar)
+  targets: TargetRow[];
+}
+
+// Sisa pasang yang masih bisa ditukar dari sebuah baris (transaksi asal tidak diubah nilainya).
+const sisaTukarItem = (it: TxItem) => it.qty - (it.exchanged_qty ?? 0);
+
 export default function Riwayat() {
   const { branchId, branchName } = useScope();
   const qc = useQueryClient();
@@ -62,11 +77,9 @@ export default function Riwayat() {
   const [page, setPage] = useState(1);
   const [receipt, setReceipt] = useState<Transaction | null>(null);
 
-  // --- State dialog tukar (berbasis qty, target boleh campur) ---
+  // --- State dialog tukar (multi-item, berbasis qty, target boleh campur) ---
   const [exchangeTx, setExchangeTx] = useState<Transaction | null>(null);
-  const [exchangeItem, setExchangeItem] = useState<TxItem | null>(null);
-  const [qtyTukar, setQtyTukar] = useState(1);
-  const [targets, setTargets] = useState<TargetRow[]>([]);
+  const [lines, setLines] = useState<LineState[]>([]);
   const [payMethod, setPayMethod] = useState<PaymentMethod>("TUNAI");
   const [diffPaidText, setDiffPaidText] = useState("");
   const keyRef = useRef(1);
@@ -82,13 +95,14 @@ export default function Riwayat() {
         }`,
       ),
     enabled: !!branchId,
+    refetchInterval: 10_000,
   });
 
   // Stok cabang = daftar artikel & ukuran yang bisa dijadikan TARGET tukar (boleh artikel lain).
   const stockQuery = useQuery({
     queryKey: ["stock-matrix", branchId],
     queryFn: () => apiGet<StockRow[]>(`/stock/matrix${branchQuery(branchId)}`),
-    enabled: !!exchangeItem && !!branchId,
+    enabled: !!exchangeTx && !!branchId,
   });
 
   const stockRows = useMemo(
@@ -101,25 +115,33 @@ export default function Riwayat() {
       .find((r) => r.article_id === articleId)
       ?.sizes.find((s) => s.size === size)?.selling_price ?? null;
 
-  const totalTargetQty = targets.reduce((s, t) => s + (t.qty || 0), 0);
-  const diffTotal = exchangeItem
-    ? targets.reduce((s, t) => {
-        const p = t.size ? priceOf(t.article_id, t.size) : null;
-        return p == null ? s : s + t.qty * (p - exchangeItem.price);
-      }, 0)
-    : 0;
-  const diffPaid = parseUang(diffPaidText);
+  const lineDiff = (l: LineState) =>
+    l.targets.reduce((s, t) => {
+      const p = t.size ? priceOf(t.article_id, t.size) : null;
+      return p == null ? s : s + t.qty * (p - l.item.price);
+    }, 0);
 
-  const exchange = useMutation({
+  const enabledLines = lines.filter((l) => l.enabled);
+  const diffTotal = enabledLines.reduce((s, l) => s + lineDiff(l), 0);
+  const diffPaid = parseUang(diffPaidText);
+  const totalPasangTukar = enabledLines.reduce((s, l) => s + l.qty, 0);
+
+  const lineTargetQty = (l: LineState) => l.targets.reduce((s, t) => s + (t.qty || 0), 0);
+  const lineValid = (l: LineState) =>
+    l.qty >= 1 &&
+    l.qty <= l.max &&
+    l.targets.length > 0 &&
+    l.targets.every((t) => t.article_id && t.size && t.qty > 0) &&
+    lineTargetQty(l) === l.qty;
+
+  const exchangeMut = useMutation({
     mutationFn: () =>
       apiPost<Transaction>(`/transactions/${exchangeTx!.id}/exchange`, {
         branch_id: branchId,
-        lines: [
-          {
-            item_id: exchangeItem!.id,
-            targets: targets.map((t) => ({ article_id: t.article_id, size: t.size, qty: t.qty })),
-          },
-        ],
+        lines: enabledLines.map((l) => ({
+          item_id: l.item.id,
+          targets: l.targets.map((t) => ({ article_id: t.article_id, size: t.size, qty: t.qty })),
+        })),
         payment_method: payMethod,
         diff_paid: diffTotal > 0 && payMethod === "TUNAI" ? diffPaid : 0,
       }),
@@ -134,37 +156,64 @@ export default function Riwayat() {
     onError: (e) => toast.error(pesanError(e, "Tukar gagal")),
   });
 
-  const openExchange = (tx: Transaction, item: TxItem) => {
+  const canSubmit =
+    !!exchangeTx &&
+    enabledLines.length > 0 &&
+    enabledLines.every(lineValid) &&
+    !exchangeMut.isPending &&
+    (diffTotal <= 0 || payMethod !== "TUNAI" || diffPaid >= diffTotal);
+
+  const openExchange = (tx: Transaction, mode: string | "all") => {
+    const exItems = tx.items.filter((it) => sisaTukarItem(it) > 0);
     setExchangeTx(tx);
-    setExchangeItem(item);
-    setQtyTukar(1);
-    setTargets([{ key: keyRef.current++, article_id: "", size: "", qty: 1 }]);
+    setLines(
+      exItems.map((it) => ({
+        key: keyRef.current++,
+        item: it,
+        enabled: mode === "all" ? true : it.id === mode,
+        qty: 1,
+        max: sisaTukarItem(it),
+        targets: [{ key: keyRef.current++, article_id: "", size: "", qty: 1 }],
+      })),
+    );
     setPayMethod("TUNAI");
     setDiffPaidText("");
   };
 
   const closeExchange = () => {
     setExchangeTx(null);
-    setExchangeItem(null);
-    setTargets([]);
+    setLines([]);
     setDiffPaidText("");
   };
 
-  const patchTarget = (key: number, patch: Partial<TargetRow>) =>
-    setTargets((prev) => prev.map((t) => (t.key === key ? { ...t, ...patch } : t)));
-
-  const targetsValid =
-    targets.length > 0 &&
-    targets.every((t) => t.article_id && t.size && t.qty > 0) &&
-    totalTargetQty === qtyTukar;
-
-  const canSubmit =
-    !!exchangeItem &&
-    qtyTukar >= 1 &&
-    qtyTukar <= (exchangeItem?.qty ?? 0) &&
-    targetsValid &&
-    !exchange.isPending &&
-    (diffTotal <= 0 || payMethod !== "TUNAI" || diffPaid >= diffTotal);
+  const setLineEnabled = (key: number, enabled: boolean) =>
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, enabled } : l)));
+  const setLineQty = (key: number, qty: number) =>
+    setLines((prev) =>
+      prev.map((l) => (l.key === key ? { ...l, qty: Math.max(1, Math.min(l.max, qty)) } : l)),
+    );
+  const addTarget = (lineKey: number) =>
+    setLines((prev) =>
+      prev.map((l) =>
+        l.key === lineKey
+          ? { ...l, targets: [...l.targets, { key: keyRef.current++, article_id: "", size: "", qty: 1 }] }
+          : l,
+      ),
+    );
+  const removeTarget = (lineKey: number, tKey: number) =>
+    setLines((prev) =>
+      prev.map((l) =>
+        l.key === lineKey ? { ...l, targets: l.targets.filter((t) => t.key !== tKey) } : l,
+      ),
+    );
+  const patchTarget = (lineKey: number, tKey: number, patch: Partial<TargetRow>) =>
+    setLines((prev) =>
+      prev.map((l) =>
+        l.key === lineKey
+          ? { ...l, targets: l.targets.map((t) => (t.key === tKey ? { ...t, ...patch } : t)) }
+          : l,
+      ),
+    );
 
   const items = listQuery.data?.items ?? [];
   const totalPages = Math.max(1, Math.ceil((listQuery.data?.total ?? 0) / 20));
@@ -173,7 +222,7 @@ export default function Riwayat() {
     <div>
       <PageHeader
         title="Riwayat & Tukar"
-        description={`Transaksi ${branchName}. Tukar artikel/ukuran berlaku maksimal 7 hari, boleh sebagian pasang dan target boleh campur.`}
+        description={`Transaksi ${branchName}. Tukar berlaku maksimal 7 hari — boleh sebagian pasang, banyak artikel sekaligus, dan target boleh campur.`}
         testId="riwayat-header"
       />
 
@@ -273,6 +322,7 @@ export default function Riwayat() {
           {items.map((tx) => {
             const sisa = sisaHariTukar(tx.created_at);
             const bisaTukar = tx.type === "SALE" && sisa > 0;
+            const jumlahBisaTukar = tx.items.filter((it) => sisaTukarItem(it) > 0).length;
             return (
               <Card key={tx.id} data-testid={`riwayat-row-${tx.receipt_no}`}>
                 <CardContent className="pt-4">
@@ -316,7 +366,7 @@ export default function Riwayat() {
                             className="flex flex-wrap items-center gap-2 text-sm"
                             data-testid={`riwayat-item-${it.id}`}
                           >
-                            <span className={cn("font-medium", it.qty < 1 && "line-through opacity-60")}>
+                            <span className={cn("font-medium", sisaTukarItem(it) < 1 && "line-through opacity-60")}>
                               {it.article_name}
                             </span>
                             <span className="tabular text-xs text-muted-foreground">
@@ -347,12 +397,12 @@ export default function Riwayat() {
                                 {it.size} → {it.new_article_name ? `${it.new_article_name} ` : ""}uk. {it.new_size}
                               </Badge>
                             )}
-                            {bisaTukar && it.qty > 0 && (
+                            {bisaTukar && sisaTukarItem(it) > 0 && (
                               <Button
                                 variant="outline"
                                 size="xs"
                                 className="gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
-                                onClick={() => openExchange(tx, it)}
+                                onClick={() => openExchange(tx, it.id)}
                                 data-testid={`tukar-button-${it.id}`}
                               >
                                 <ArrowLeftRight className="size-3" /> Tukar
@@ -368,6 +418,17 @@ export default function Riwayat() {
                         {rupiah(tx.total)}
                       </span>
                       <span className="text-xs text-muted-foreground">{tx.payment_method}</span>
+                      {bisaTukar && jumlahBisaTukar > 1 && (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          className="gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
+                          onClick={() => openExchange(tx, "all")}
+                          data-testid={`tukar-semua-${tx.receipt_no}`}
+                        >
+                          <ArrowLeftRight className="size-3" /> Tukar Beberapa
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="xs"
@@ -412,189 +473,222 @@ export default function Riwayat() {
         </div>
       )}
 
-      {/* Dialog Tukar — berbasis qty, target boleh campur antar artikel/ukuran */}
-      <Dialog open={!!exchangeItem} onOpenChange={(o) => !o && closeExchange()}>
-        <DialogContent className="max-h-[92svh] overflow-y-auto sm:max-w-lg" data-testid="tukar-dialog">
+      {/* Dialog Tukar — multi-item, target boleh campur antar artikel/ukuran */}
+      <Dialog open={!!exchangeTx} onOpenChange={(o) => !o && closeExchange()}>
+        <DialogContent className="max-h-[92svh] overflow-y-auto sm:max-w-2xl" data-testid="tukar-dialog">
           <DialogHeader>
             <DialogTitle className="font-heading">Tukar Artikel / Ukuran</DialogTitle>
             <DialogDescription>
-              Stok lama kembali (+), stok baru berkurang (−), dan omset artikel ikut menyesuaikan.
-              Sisa pasang yang belum ditukar masih bisa ditukar lagi selama ≤ 7 hari.
+              Centang barang yang ditukar (boleh lebih dari satu artikel). Untuk tiap barang, tentukan
+              berapa pasang dan penggantinya — boleh campur artikel/ukuran. Selisih semua dijumlah jadi satu.
             </DialogDescription>
           </DialogHeader>
 
-          {exchangeItem && (
+          {exchangeTx && (
             <div className="space-y-4">
-              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
-                <p className="font-semibold">{exchangeItem.article_name}</p>
-                <p className="tabular mt-0.5 text-xs text-muted-foreground">
-                  Uk. {exchangeItem.size} · {rupiah(exchangeItem.price)}/psg · sisa bisa ditukar{" "}
-                  {angka(exchangeItem.qty)} psg
-                </p>
-              </div>
+              <div className="space-y-3" data-testid="tukar-lines">
+                {lines.map((l) => {
+                  const price = l.item.price;
+                  return (
+                    <div
+                      key={l.key}
+                      className={cn(
+                        "rounded-lg border p-3 transition-colors",
+                        l.enabled ? "border-sky-300 bg-sky-50/40" : "border-border bg-muted/30",
+                      )}
+                      data-testid={`tukar-line-${l.item.id}`}
+                    >
+                      <label className="flex cursor-pointer items-start gap-3">
+                        <Checkbox
+                          checked={l.enabled}
+                          onCheckedChange={(v: boolean) => setLineEnabled(l.key, v === true)}
+                          className="mt-0.5"
+                          data-testid={`tukar-line-toggle-${l.item.id}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold">{l.item.article_name}</p>
+                          <p className="tabular text-xs text-muted-foreground">
+                            Uk. {l.item.size} · {rupiah(price)}/psg · sisa {angka(l.max)} psg
+                          </p>
+                        </div>
+                      </label>
 
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold uppercase tracking-wide">
-                  Berapa pasang yang ditukar?
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    disabled={qtyTukar <= 1}
-                    onClick={() => setQtyTukar((q) => Math.max(1, q - 1))}
-                    data-testid="tukar-qty-minus"
-                  >
-                    <Minus className="size-3.5" />
-                  </Button>
-                  <span className="tabular w-10 text-center text-base font-bold" data-testid="tukar-qty-value">
-                    {qtyTukar}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    disabled={qtyTukar >= exchangeItem.qty}
-                    onClick={() => setQtyTukar((q) => Math.min(exchangeItem.qty, q + 1))}
-                    data-testid="tukar-qty-plus"
-                  >
-                    <Plus className="size-3.5" />
-                  </Button>
-                  <span className="text-xs text-muted-foreground">dari {angka(exchangeItem.qty)} psg</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-semibold uppercase tracking-wide">
-                    Diganti menjadi (boleh campur)
-                  </Label>
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    className="gap-1"
-                    onClick={() =>
-                      setTargets((p) => [...p, { key: keyRef.current++, article_id: "", size: "", qty: 1 }])
-                    }
-                    data-testid="tukar-add-target"
-                  >
-                    <Plus className="size-3" /> Target
-                  </Button>
-                </div>
-
-                {stockQuery.isLoading ? (
-                  <SkeletonRows rows={2} testId="tukar-target-loading" />
-                ) : (
-                  <div className="space-y-2" data-testid="tukar-targets">
-                    {targets.map((t, idx) => {
-                      const row = stockRows.find((r) => r.article_id === t.article_id);
-                      const readySizes = (row?.sizes ?? []).filter((s) => s.qty > 0);
-                      const price = t.size ? priceOf(t.article_id, t.size) : null;
-                      return (
-                        <div
-                          key={t.key}
-                          className="space-y-2 rounded-lg border border-border bg-card p-2.5"
-                          data-testid={`tukar-target-${idx}`}
-                        >
+                      {l.enabled && (
+                        <div className="mt-3 space-y-3 border-t border-sky-200 pt-3">
                           <div className="flex items-center gap-2">
-                            <Select
-                              value={t.article_id}
-                              onValueChange={(v: string) => patchTarget(t.key, { article_id: v, size: "" })}
+                            <Label className="text-xs font-semibold uppercase tracking-wide">
+                              Ditukar
+                            </Label>
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              disabled={l.qty <= 1}
+                              onClick={() => setLineQty(l.key, l.qty - 1)}
+                              data-testid={`tukar-qty-minus-${l.item.id}`}
                             >
-                              <SelectTrigger className="h-9 flex-1" data-testid={`tukar-target-article-${idx}`}>
-                                <SelectValue>
-                                  {(v) =>
-                                    stockRows.find((r) => r.article_id === (v as string))?.name ??
-                                    "Pilih artikel pengganti"
-                                  }
-                                </SelectValue>
-                              </SelectTrigger>
-                              <SelectContent>
-                                {stockRows.map((r) => (
-                                  <SelectItem
-                                    key={r.article_id}
-                                    value={r.article_id}
-                                    data-testid={`tukar-target-option-${idx}-${r.code}`}
-                                  >
-                                    {r.code} — {r.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            {targets.length > 1 && (
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                onClick={() => setTargets((p) => p.filter((x) => x.key !== t.key))}
-                                data-testid={`tukar-target-remove-${idx}`}
-                              >
-                                <Trash2 className="size-3.5" />
-                              </Button>
-                            )}
+                              <Minus className="size-3.5" />
+                            </Button>
+                            <span
+                              className="tabular w-8 text-center text-base font-bold"
+                              data-testid={`tukar-qty-value-${l.item.id}`}
+                            >
+                              {l.qty}
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              disabled={l.qty >= l.max}
+                              onClick={() => setLineQty(l.key, l.qty + 1)}
+                              data-testid={`tukar-qty-plus-${l.item.id}`}
+                            >
+                              <Plus className="size-3.5" />
+                            </Button>
+                            <span className="text-xs text-muted-foreground">
+                              dari {angka(l.max)} psg
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              className="ml-auto gap-1"
+                              onClick={() => addTarget(l.key)}
+                              data-testid={`tukar-add-target-${l.item.id}`}
+                            >
+                              <Plus className="size-3" /> Pengganti
+                            </Button>
                           </div>
 
-                          {t.article_id && (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {readySizes.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">Semua ukuran habis.</p>
-                              ) : (
-                                readySizes.map((s) => (
-                                  <button
-                                    key={s.id}
-                                    type="button"
-                                    onClick={() => patchTarget(t.key, { size: s.size })}
-                                    data-testid={`tukar-target-size-${idx}-${s.size}`}
-                                    className={cn(
-                                      "tabular min-h-9 min-w-9 rounded-lg border px-2 py-1 text-xs font-semibold transition-transform duration-100 active:scale-95",
-                                      t.size === s.size
-                                        ? "border-sky-500 bg-sky-500 text-white"
-                                        : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
-                                    )}
+                          {stockQuery.isLoading ? (
+                            <SkeletonRows rows={1} testId={`tukar-target-loading-${l.item.id}`} />
+                          ) : (
+                            <div className="space-y-2">
+                              {l.targets.map((t, idx) => {
+                                const row = stockRows.find((r) => r.article_id === t.article_id);
+                                const readySizes = (row?.sizes ?? []).filter((s) => s.qty > 0);
+                                const tPrice = t.size ? priceOf(t.article_id, t.size) : null;
+                                return (
+                                  <div
+                                    key={t.key}
+                                    className="space-y-2 rounded-lg border border-border bg-card p-2.5"
+                                    data-testid={`tukar-target-${l.item.id}-${idx}`}
                                   >
-                                    {s.size}
-                                    <span className="ml-1 text-[10px] font-normal opacity-70">{s.qty}</span>
-                                  </button>
-                                ))
-                              )}
-                              <span className="ml-auto flex items-center gap-1 text-xs">
-                                <Input
-                                  inputMode="numeric"
-                                  className="tabular h-8 w-14 text-center"
-                                  value={String(t.qty)}
-                                  onChange={(e) =>
-                                    patchTarget(t.key, { qty: Math.max(1, parseUang(e.target.value) || 1) })
-                                  }
-                                  data-testid={`tukar-target-qty-${idx}`}
-                                />
-                                psg
-                              </span>
+                                    <div className="flex items-center gap-2">
+                                      <Select
+                                        value={t.article_id}
+                                        onValueChange={(v: string) =>
+                                          patchTarget(l.key, t.key, { article_id: v, size: "" })
+                                        }
+                                      >
+                                        <SelectTrigger
+                                          className="h-9 flex-1"
+                                          data-testid={`tukar-target-article-${l.item.id}-${idx}`}
+                                        >
+                                          <SelectValue>
+                                            {(v) =>
+                                              stockRows.find((r) => r.article_id === (v as string))?.name ??
+                                              "Pilih artikel pengganti"
+                                            }
+                                          </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {stockRows.map((r) => (
+                                            <SelectItem
+                                              key={r.article_id}
+                                              value={r.article_id}
+                                              data-testid={`tukar-target-option-${l.item.id}-${idx}-${r.code}`}
+                                            >
+                                              {r.code} — {r.name}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      {l.targets.length > 1 && (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-xs"
+                                          onClick={() => removeTarget(l.key, t.key)}
+                                          data-testid={`tukar-target-remove-${l.item.id}-${idx}`}
+                                        >
+                                          <Trash2 className="size-3.5" />
+                                        </Button>
+                                      )}
+                                    </div>
+
+                                    {t.article_id && (
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {readySizes.length === 0 ? (
+                                          <p className="text-xs text-muted-foreground">Semua ukuran habis.</p>
+                                        ) : (
+                                          readySizes.map((s) => (
+                                            <button
+                                              key={s.id}
+                                              type="button"
+                                              onClick={() => patchTarget(l.key, t.key, { size: s.size })}
+                                              data-testid={`tukar-target-size-${l.item.id}-${idx}-${s.size}`}
+                                              className={cn(
+                                                "tabular min-h-9 min-w-9 rounded-lg border px-2 py-1 text-xs font-semibold transition-transform duration-100 active:scale-95",
+                                                t.size === s.size
+                                                  ? "border-sky-500 bg-sky-500 text-white"
+                                                  : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+                                              )}
+                                            >
+                                              {s.size}
+                                              <span className="ml-1 text-[10px] font-normal opacity-70">{s.qty}</span>
+                                            </button>
+                                          ))
+                                        )}
+                                        <span className="ml-auto flex items-center gap-1 text-xs">
+                                          <Input
+                                            inputMode="numeric"
+                                            className="tabular h-8 w-14 text-center"
+                                            value={String(t.qty)}
+                                            onChange={(e) =>
+                                              patchTarget(l.key, t.key, {
+                                                qty: Math.max(1, parseUang(e.target.value) || 1),
+                                              })
+                                            }
+                                            data-testid={`tukar-target-qty-${l.item.id}-${idx}`}
+                                          />
+                                          psg
+                                        </span>
+                                      </div>
+                                    )}
+
+                                    {tPrice != null && (
+                                      <p
+                                        className="tabular text-xs text-muted-foreground"
+                                        data-testid={`tukar-target-price-${l.item.id}-${idx}`}
+                                      >
+                                        {rupiah(tPrice)}/psg · selisih {rupiah(tPrice - price)}/psg
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
 
-                          {price != null && (
-                            <p className="tabular text-xs text-muted-foreground" data-testid={`tukar-target-price-${idx}`}>
-                              {rupiah(price)}/psg · selisih {rupiah(price - exchangeItem.price)}/psg
-                            </p>
-                          )}
+                          <p
+                            className={cn(
+                              "text-xs",
+                              lineTargetQty(l) === l.qty ? "text-emerald-700" : "text-amber-700",
+                            )}
+                            data-testid={`tukar-qty-balance-${l.item.id}`}
+                          >
+                            Total pengganti {angka(lineTargetQty(l))} psg dari {angka(l.qty)} psg
+                            {lineTargetQty(l) !== l.qty && " — harus sama persis"}
+                          </p>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-                <p
-                  className={cn(
-                    "text-xs",
-                    totalTargetQty === qtyTukar ? "text-emerald-700" : "text-amber-700",
-                  )}
-                  data-testid="tukar-qty-balance"
-                >
-                  Total target {angka(totalTargetQty)} psg dari {angka(qtyTukar)} psg yang ditukar
-                  {totalTargetQty !== qtyTukar && " — harus sama persis"}
-                </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="space-y-3 rounded-lg border border-border p-3">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Total selisih</span>
+                  <span className="text-muted-foreground">
+                    {angka(totalPasangTukar)} pasang ditukar · Total selisih
+                  </span>
                   <span
                     className={cn(
                       "tabular font-semibold",
@@ -660,10 +754,10 @@ export default function Riwayat() {
                 <Button
                   className="flex-1"
                   disabled={!canSubmit}
-                  onClick={() => exchange.mutate()}
+                  onClick={() => exchangeMut.mutate()}
                   data-testid="tukar-confirm-button"
                 >
-                  {exchange.isPending ? "Memproses…" : "Proses Tukar"}
+                  {exchangeMut.isPending ? "Memproses…" : "Proses Tukar"}
                 </Button>
               </div>
             </div>

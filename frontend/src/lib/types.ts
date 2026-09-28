@@ -113,6 +113,39 @@ export interface Transaction {
   created_at: string;
 }
 
+export interface ExchangeTarget {
+  article_id: string;
+  article_code: string;
+  article_name: string;
+  size: string;
+  qty: number;
+  price: number;
+}
+
+export interface ExchangeLine {
+  item_id: string;
+  article_id: string;
+  article_code: string;
+  article_name: string;
+  size: string;
+  price: number;
+  qty: number;
+  targets: ExchangeTarget[];
+}
+
+export interface ExchangeRecord {
+  id: string;
+  tx_id: string;
+  receipt_no: string;
+  lines: ExchangeLine[];
+  total_diff: number;
+  payment_method: PaymentMethod;
+  branch_id: string;
+  branch_name: string;
+  by_name: string;
+  created_at: string;
+}
+
 export interface TransferItem {
   article_id: string;
   article_code: string;

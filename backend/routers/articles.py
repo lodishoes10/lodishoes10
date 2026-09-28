@@ -9,6 +9,8 @@
 """
 
 import asyncio
+import csv
+import io
 import re
 import uuid
 from datetime import datetime
@@ -160,6 +162,99 @@ async def patch_article(article_id: str, input: ArticlePatch, user: dict = Depen
         await db.articles.update_one({"id": article_id}, {"$set": update})
     fresh = await db.articles.find_one({"id": article_id})
     return article_out(fresh, include_cost=is_admin)
+
+
+class ImportIn(BaseModel):
+    csv: str = Field(min_length=1, max_length=2_000_000)
+
+
+def _norm_header(name: str) -> str:
+    return (name or "").strip().lower().replace(" ", "_")
+
+
+# Alias kolom Indonesia → field internal (juga menerima nama Inggris).
+_ART_ALIASES = {
+    "kode": "code", "code": "code", "sku": "code",
+    "nama": "name", "name": "name", "nama_artikel": "name",
+    "brand": "brand", "merek": "brand", "merk": "brand",
+    "kategori": "category", "category": "category",
+    "barcode": "barcode",
+    "modal": "cost_price", "harga_modal": "cost_price", "cost": "cost_price",
+    "cost_price": "cost_price", "hpp": "cost_price",
+}
+
+
+@router.post("/articles/import")
+async def import_articles(input: ImportIn, user: dict = Depends(require_admin)):
+    """Impor massal Master Produk dari CSV (khusus admin).
+
+    Header didukung (Indonesia/Inggris): kode, nama, brand, kategori, barcode, modal.
+    Baris dengan kode yang sudah ada → diperbarui; kode kosong → dibuatkan otomatis.
+    """
+    reader = csv.DictReader(io.StringIO(input.csv))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=422, detail="CSV kosong atau tanpa header")
+    field_map = {fn: _ART_ALIASES.get(_norm_header(fn)) for fn in reader.fieldnames}
+    if "name" not in field_map.values():
+        raise HTTPException(status_code=422, detail="Kolom 'nama' wajib ada di CSV")
+
+    created = updated = 0
+    errors: list[str] = []
+    for i, raw in enumerate(reader, start=2):  # baris 1 = header
+        row: dict = {}
+        for fn, val in raw.items():
+            key = field_map.get(fn)
+            if key:
+                row[key] = (val or "").strip()
+        name = row.get("name", "")
+        if not name:
+            continue  # lewati baris kosong
+        if len(name) < 2:
+            errors.append(f"Baris {i}: nama terlalu pendek")
+            continue
+        code = (row.get("code") or "").strip().upper()
+        barcode = (row.get("barcode") or "").strip()
+        try:
+            cost_price = int(re.sub(r"\D", "", row.get("cost_price", "")) or 0)
+        except ValueError:
+            cost_price = 0
+        if barcode:
+            clash = await db.articles.find_one({"barcode": barcode, **({"code": {"$ne": code}} if code else {})})
+            if clash and clash.get("code") != code:
+                errors.append(f"Baris {i} ({name}): barcode {barcode} sudah dipakai {clash.get('name')}")
+                barcode = ""
+        existing = await db.articles.find_one({"code": code}) if code else None
+        if existing:
+            await db.articles.update_one(
+                {"id": existing["id"]},
+                {"$set": {
+                    "name": name,
+                    "brand": row.get("brand", existing.get("brand", "")),
+                    "category": row.get("category", existing.get("category", "")),
+                    "barcode": barcode or existing.get("barcode", ""),
+                    "cost_price": cost_price,
+                }},
+            )
+            updated += 1
+        else:
+            code = code or await _auto_code()
+            if await db.articles.find_one({"code": code}):
+                errors.append(f"Baris {i}: kode {code} bentrok")
+                continue
+            await db.articles.insert_one({
+                "id": str(uuid.uuid4()),
+                "code": code,
+                "name": name,
+                "brand": row.get("brand", ""),
+                "category": row.get("category", ""),
+                "barcode": barcode,
+                "cost_price": cost_price,
+                "image_url": "",
+                "is_active": True,
+                "created_at": now_utc(),
+            })
+            created += 1
+    return {"ok": True, "created": created, "updated": updated, "errors": errors[:50]}
 
 
 @router.delete("/articles/{article_id}")

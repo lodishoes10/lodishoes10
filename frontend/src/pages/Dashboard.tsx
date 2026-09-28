@@ -73,6 +73,7 @@ export default function Dashboard() {
     queryKey: ["dashboard", branchId],
     queryFn: () => apiGet<DashboardData>(`/reports/dashboard${branchQuery(branchId)}`),
     enabled: !!branchId,
+    refetchInterval: 10_000,
   });
 
   const d = q.data;

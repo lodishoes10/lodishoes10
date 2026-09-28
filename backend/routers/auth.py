@@ -10,9 +10,14 @@ from pydantic import BaseModel, Field
 from lib.auth import (
     SESSION_COOKIE,
     SESSION_TTL_DAYS,
+    check_login_allowed,
+    clear_login_attempts,
+    client_ip,
+    cookie_secure,
     create_session,
     destroy_session,
     get_current_user,
+    record_login_failure,
     user_public,
     verify_pin,
 )
@@ -27,16 +32,22 @@ class LoginIn(BaseModel):
 
 
 @router.post("/auth/login")
-async def login(input: LoginIn, response: Response):
-    user = await db.users.find_one({"username": input.username.strip().lower()})
+async def login(input: LoginIn, request: Request, response: Response):
+    username = input.username.strip().lower()
+    identifier = f"{client_ip(request)}:{username}"
+    await check_login_allowed(identifier)
+    user = await db.users.find_one({"username": username})
     if not user or not verify_pin(input.pin, user.get("pin_hash", "")):
         # Generic on purpose — never reveal whether the username or the PIN was wrong.
+        await record_login_failure(identifier)
         raise HTTPException(status_code=401, detail="Username atau PIN salah")
+    await clear_login_attempts(identifier)
     token, expires = await create_session(user["id"])
     response.set_cookie(
         SESSION_COOKIE,
         token,
         httponly=True,
+        secure=cookie_secure(),
         samesite="lax",
         max_age=SESSION_TTL_DAYS * 86400,
         path="/",

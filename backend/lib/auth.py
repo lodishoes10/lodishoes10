@@ -9,6 +9,7 @@ Security rules implemented here:
 
 import hashlib
 import hmac
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,11 +21,19 @@ from lib.db import db
 
 SESSION_COOKIE = "pos_session"
 SESSION_TTL_DAYS = 7
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
 _SCRYPT = {"n": 16384, "r": 8, "p": 1, "dklen": 32}
 
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def cookie_secure() -> bool:
+    """Cookie sesi wajib HTTPS di produksi. Diatur lewat env COOKIE_SECURE (default true).
+    Preview & produksi memakai HTTPS, jadi default true aman."""
+    return os.environ.get("COOKIE_SECURE", "true").strip().lower() != "false"
 
 
 def naive_to_aware(dt: datetime) -> datetime:
@@ -60,6 +69,43 @@ async def create_session(user_id: str) -> tuple[str, datetime]:
 
 async def destroy_session(token: str) -> None:
     await db.sessions.delete_one({"token": token})
+
+
+async def check_login_allowed(identifier: str) -> None:
+    """Blokir sementara bila percobaan login gagal terlalu sering (anti brute-force PIN)."""
+    rec = await db.login_attempts.find_one({"identifier": identifier})
+    if not rec:
+        return
+    locked = rec.get("locked_until")
+    if locked and naive_to_aware(locked) > now_utc():
+        secs = (naive_to_aware(locked) - now_utc()).total_seconds()
+        mins = max(1, int((secs + 59) // 60))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Terlalu banyak percobaan gagal. Coba lagi dalam {mins} menit.",
+        )
+
+
+async def record_login_failure(identifier: str) -> None:
+    rec = await db.login_attempts.find_one({"identifier": identifier})
+    count = (rec.get("count", 0) if rec else 0) + 1
+    update: dict = {"count": count, "updated_at": now_utc()}
+    if count >= LOGIN_MAX_ATTEMPTS:
+        update["locked_until"] = now_utc() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+        update["count"] = 0  # reset penghitung setelah dikunci
+    await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
+
+
+async def clear_login_attempts(identifier: str) -> None:
+    await db.login_attempts.delete_one({"identifier": identifier})
+
+
+def client_ip(request: Request) -> str:
+    """IP klien di belakang ingress (TLS diterminasi proxy)."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 async def get_current_user(request: Request) -> dict[str, Any]:

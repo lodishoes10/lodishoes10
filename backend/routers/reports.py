@@ -75,10 +75,13 @@ async def dashboard(branch_id: str = "", user: dict = Depends(get_current_user))
     now_local = datetime.now(zone)
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
-    base_match: dict = {"type": "SALE"}  # TUKAR never counts as sales
+    base_match: dict = {"type": "SALE"}  # penjualan murni
     if b:
         base_match["branch_id"] = b
     today_match = base_match | {"created_at": {"$gte": today_start}}
+    tukar_today_match: dict = {"type": "TUKAR", "created_at": {"$gte": today_start}}
+    if b:
+        tukar_today_match["branch_id"] = b
 
     tx_agg = await db.transactions.aggregate(
         [
@@ -93,24 +96,37 @@ async def dashboard(branch_id: str = "", user: dict = Depends(get_current_user))
             {"$group": {"_id": None, "items": {"$sum": "$items.qty"}, "cost": {"$sum": "$items.line_cost"}}},
         ]
     ).to_list(1)
+    # Selisih tukar hari ini: revenue += Σtotal (selisih harga jual), cost += Σcost_diff (selisih modal).
+    tukar_agg = await db.transactions.aggregate(
+        [
+            {"$match": tukar_today_match},
+            {"$group": {"_id": None, "diff_rev": {"$sum": "$total"}, "diff_cost": {"$sum": "$cost_diff"}}},
+        ]
+    ).to_list(1)
 
     count = int(tx_agg[0]["count"]) if tx_agg else 0
-    revenue = int(tx_agg[0]["revenue"]) if tx_agg else 0
     discount = int(tx_agg[0]["discount"]) if tx_agg else 0
     items_sold = int(item_agg[0]["items"]) if item_agg else 0
-    cost = int(item_agg[0]["cost"]) if item_agg else 0
+    diff_rev = int(tukar_agg[0]["diff_rev"]) if tukar_agg else 0
+    diff_cost = int(tukar_agg[0]["diff_cost"]) if tukar_agg else 0
+    revenue = (int(tx_agg[0]["revenue"]) if tx_agg else 0) + diff_rev  # omzet penjualan + selisih tukar
+    cost = (int(item_agg[0]["cost"]) if item_agg else 0) + diff_cost
     is_admin = user.get("role") == "admin"
 
-    # 7-day trend (including today), filled so missing days render as zero.
+    # 7-day trend (including today). Total omzet per hari = penjualan + selisih tukar hari itu;
+    # count hanya menghitung penjualan (SALE) agar jumlah transaksi tidak dobel.
     start7 = today_start - timedelta(days=6)
+    both_match: dict = {"type": {"$in": ["SALE", "TUKAR"]}}
+    if b:
+        both_match["branch_id"] = b
     trend_rows = await db.transactions.aggregate(
         [
-            {"$match": base_match | {"created_at": {"$gte": start7}}},
+            {"$match": both_match | {"created_at": {"$gte": start7}}},
             {
                 "$group": {
                     "_id": {"$dateToString": {"date": "$created_at", "format": "%Y-%m-%d", "timezone": str(zone)}},
                     "total": {"$sum": "$total"},
-                    "count": {"$sum": 1},
+                    "count": {"$sum": {"$cond": [{"$eq": ["$type", "SALE"]}, 1, 0]}},
                 }
             },
         ]
@@ -236,6 +252,48 @@ async def gross_profit(
         )
         for r in rows
     ]
+
+    # ---- Selisih TUKAR ikut dihitung (rentang & scope sama) → laba per artikel/cabang akurat ----
+    tukar_match: dict = {"type": "TUKAR", "created_at": {"$gte": start, "$lt": end}}
+    if b:
+        tukar_match["branch_id"] = b
+    row_by_key = {r.key: r for r in out_rows}
+
+    def _fold(key: str, label: str, sublabel: str, rev: int, cst: int) -> None:
+        existing = row_by_key.get(key)
+        if existing:
+            existing.revenue += rev
+            existing.cost += cst
+            existing.profit = existing.revenue - existing.discount - existing.cost
+        else:
+            nr = ProfitRow(
+                key=key, label=label or "-", sublabel=sublabel,
+                qty=0, revenue=rev, discount=0, cost=cst, profit=rev - cst,
+            )
+            out_rows.append(nr)
+            row_by_key[key] = nr
+
+    if group_by == "branch":
+        t_rows = await db.transactions.aggregate([
+            {"$match": tukar_match},
+            {"$group": {"_id": "$branch_id", "label": {"$first": "$branch_name"},
+                        "revenue": {"$sum": "$total"}, "cost": {"$sum": "$cost_diff"}}},
+        ]).to_list(500)
+        for tr in t_rows:
+            _fold(str(tr["_id"]), tr.get("label") or "-", str(tr["_id"]),
+                  int(tr.get("revenue", 0)), int(tr.get("cost", 0)))
+    else:
+        t_rows = await db.transactions.aggregate([
+            {"$match": tukar_match},
+            {"$unwind": "$items"},
+            {"$group": {"_id": "$items.new_article_id",
+                        "label": {"$first": "$items.new_article_name"},
+                        "sublabel": {"$first": "$items.new_article_code"},
+                        "revenue": {"$sum": "$items.rev_delta"}, "cost": {"$sum": "$items.cost_delta"}}},
+        ]).to_list(500)
+        for tr in t_rows:
+            _fold(str(tr["_id"]), tr.get("label") or "-", str(tr.get("sublabel") or ""),
+                  int(tr.get("revenue", 0)), int(tr.get("cost", 0)))
 
     # Laba bersih = laba kotor − pengeluaran. Pengeluaran hanya bisa dipetakan per CABANG
     # (sebuah pengeluaran tidak melekat pada artikel), jadi kolomnya diisi saat group_by=branch.
