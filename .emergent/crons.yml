@@ -1,0 +1,9 @@
+crons:
+  - name: backup-mongo-harian
+    description: "Backup MongoDB tiap hari jam 03:00 WIB, arsip disimpan 7 hari terakhir"
+    cron: "0 3 * * *"
+    timezone: "Asia/Jakarta"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/backup-mongo"
+    method: POST
+    enabled: true
