@@ -44,3 +44,11 @@ Atlas Network Access harus mengizinkan IP server (0.0.0.0/0 paling aman untuk ho
 ## 6. Deploy (nanti)
 Panduan lengkap Railway + Atlas: `DEPLOY_RAILWAY.md`, `Dockerfile`, `railway.toml` sudah ada di repo.
 Set `PLAIN_BUILD=true` saat build frontend di luar Emergent.
+
+## 7. Deploy Railway (SELESAI, Jun 2026)
+- URL produksi: https://lodishoes-pos-production.up.railway.app (project "Lodishoes", service `lodishoes-pos`, env production).
+- Deploy via `railway up` (upload dari workspace, bukan GitHub App). Untuk deploy ulang: `RAILWAY_TOKEN=<project token> railway up --service 17a0dbef-8ade-40ae-a8a2-2706f6398ef4 --detach` dari root repo,
+  atau sambungkan repo GitHub di dashboard Railway (Settings → Source) agar auto-deploy tiap push.
+- DB sama dengan preview Emergent (Atlas `lodishoes`) → satu data, tidak dobel.
+- Dockerfile: type-check hanya `tsconfig.app.json` (vite.config.ts mengimpor paket internal Emergent yang dilepas saat build).
+- Variabel di Railway: MONGO_URL, DB_NAME, COOKIE_SECURE, CORS_ORIGINS, APP_TZ, WEBHOOK_CRON_SECRET, BACKUP_DIR=/tmp/backups, TWILIO_* kosong.

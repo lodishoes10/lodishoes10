@@ -17,7 +17,8 @@ RUN yarn install --ignore-engines
 
 COPY frontend/ ./
 # PLAIN_BUILD=true -> vite.config.ts melewatkan plugin internal Emergent.
-RUN PLAIN_BUILD=true yarn build
+# Type-check hanya src (tsconfig.node.json memeriksa vite.config.ts yang mengimpor paket internal).
+RUN yarn tsc -p tsconfig.app.json --noEmit && PLAIN_BUILD=true yarn vite build
 
 # ---------- Stage 2: runtime (backend + frontend statis) ----------
 FROM python:3.11-slim

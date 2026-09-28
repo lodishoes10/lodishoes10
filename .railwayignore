@@ -1,0 +1,12 @@
+**/node_modules
+**/.env
+**/__pycache__
+**/.pytest_cache
+frontend/dist
+frontend/public/*.zip
+backups
+test_reports
+tests
+memory
+.emergent
+.git

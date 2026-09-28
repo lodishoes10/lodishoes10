@@ -88,3 +88,4 @@ via cron (03:00 WIB).
 - Verifikasi: login, /transaksi, /produk (tombol Impor CSV), cookie Secure, login_attempts, omzet tukar Opsi 1 — semua ada.
 
 - Jun 2026 (final QA): label omzet Dashboard/Laporan disesuaikan Opsi 1; QA penuh 3 role lolos (iteration_2); test stale diperbarui. Rangkuman: memory/RANGKUMAN_RESTORE_JUN2026.md. ZIP: frontend/public/lodishoes-pos-FINAL-jun2026.zip
+- Jun 2026: Deploy Railway selesai → https://lodishoes-pos-production.up.railway.app (Atlas `lodishoes`, sama dengan preview).
