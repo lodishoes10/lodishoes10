@@ -202,17 +202,12 @@ export default function Produk() {
                     {a.category || "—"}
                   </TableCell>
                   <TableCell data-testid={`produk-barcode-${a.code}`}>
-                    <div className="flex items-center gap-2">
-                      <img
-                        src={`/api/articles/${a.id}/barcode.png`}
-                        alt={a.barcode || a.code}
-                        loading="lazy"
-                        className="h-9 w-auto rounded border border-border bg-white px-1"
-                      />
-                      {a.barcode && (
-                        <span className="tabular text-[11px] text-muted-foreground">{a.barcode}</span>
-                      )}
-                    </div>
+                    <img
+                      src={`/api/articles/${a.id}/barcode.png`}
+                      alt={a.barcode || a.code}
+                      loading="lazy"
+                      className="h-10 w-auto max-w-[140px] rounded border border-border bg-white px-1"
+                    />
                   </TableCell>
                   <TableCell className="text-right">
                     <button

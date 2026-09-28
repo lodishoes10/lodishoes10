@@ -185,9 +185,6 @@ export default function Label() {
                       loading="lazy"
                       style={{ width: "100%", maxWidth: "52mm", height: "auto", margin: "1mm auto 0" }}
                     />
-                    <p className="tabular" style={{ fontSize: "7pt", letterSpacing: "1.5px" }}>
-                      {a.barcode}
-                    </p>
                   </div>
                 ))}
               </div>
