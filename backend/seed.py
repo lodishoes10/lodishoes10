@@ -132,12 +132,14 @@ async def upsert_stock(branches: dict[str, dict], articles: dict[str, dict]) -> 
 
 
 async def seed_history(branches: dict[str, dict], articles: dict[str, dict]) -> None:
-    """Transaksi contoh kemarin (3 pasang) supaya Tukar berbasis qty bisa langsung diuji."""
-    if await db.transactions.count_documents({}):
-        return
+    """Transaksi contoh kemarin (3 pasang) supaya Tukar berbasis qty bisa langsung diuji.
+    Idempoten: upsert berdasarkan receipt_no sehingga selalu tersedia meski seed diulang."""
     branch = branches["BLR"]
     art = articles["LS-001"]
     when = datetime.now(timezone.utc) - timedelta(days=1)
+    receipt_no = f"TRX-{when:%Y%m%d}-BLR-001"
+    if await db.transactions.find_one({"receipt_no": receipt_no}):
+        return
     stock = await db.stock_items.find_one({"branch_id": branch["id"], "article_id": art["id"], "size": "40"})
     price = int(stock["selling_price"])
     qty = 3
@@ -160,7 +162,7 @@ async def seed_history(branches: dict[str, dict], articles: dict[str, dict]) -> 
     }
     tx = {
         "id": str(uuid.uuid4()),
-        "receipt_no": f"TRX-{when:%Y%m%d}-BLR-001",
+        "receipt_no": receipt_no,
         "branch_id": branch["id"],
         "branch_name": branch["name"],
         "type": "SALE",
